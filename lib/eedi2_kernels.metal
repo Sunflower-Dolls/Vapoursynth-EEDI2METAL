@@ -246,11 +246,6 @@ kernel void KERNEL_NAME(calcDirections)(constant EEDI2Param &d [[buffer(0)]],
     constexpr int block_w = 64;
     constexpr int off_w = block_w / 2;
 
-    // Use pos_x for loading, but we need to handle the macro GET_LINE which
-    // uses 'pos' We can redefine GET_LINE locally or just use manual
-    // calculation manual calculation is safer to avoid 'pos' ambiguity if we
-    // renamed it
-
 #define GET_LINE_INT(p, y_off)                                                 \
     ((device const TYPE *)((device const char *)p + (pos_y + (y_off)) * pitch))
 

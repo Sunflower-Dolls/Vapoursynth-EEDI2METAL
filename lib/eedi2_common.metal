@@ -1,6 +1,3 @@
-#ifndef EEDI2_COMMON_METAL_H
-#define EEDI2_COMMON_METAL_H
-
 #include <metal_stdlib>
 using namespace metal;
 
@@ -84,5 +81,3 @@ template <typename T, size_t N>
 METAL_FUNC void boseSortArray(thread T (&arr)[N]) {
     bose::Pstar<T, 1, N>(arr);
 }
-
-#endif // EEDI2_COMMON_METAL_H
