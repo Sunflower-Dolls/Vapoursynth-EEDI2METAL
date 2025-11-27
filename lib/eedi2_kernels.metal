@@ -1069,6 +1069,12 @@ kernel void KERNEL_NAME(interpolateLattice)(
     if (pos.x >= width || y < 1 || y >= height * 2 - 1)
         return;
 
+    if (pos.x == 0 || pos.x == width - 1) {
+        out_line[pos.x] = (dstp[pos.x] + dstpnn[pos.x] + 1) / 2;
+        mout_line[pos.x] = neutral;
+        return;
+    }
+
     int dir = dmskp[pos.x];
     const int lim = limlut[abs(dir - int(neutral)) >> shift2] << shift;
 

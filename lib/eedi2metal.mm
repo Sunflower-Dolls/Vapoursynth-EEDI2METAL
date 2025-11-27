@@ -20,6 +20,7 @@
 #import <Metal/Metal.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <map>
 #include <memory>
 #include <string>
@@ -204,6 +205,35 @@ static const VSFrameRef* VS_CC eedi2GetFrame(int n, int activationReason,
                 (height + threadsPerGroup.height - 1) / threadsPerGroup.height,
                 1);
 
+            auto dump_buffer = [&](id<MTLBuffer> buffer,
+                                   const std::string& name, bool is_2x) {
+                [encoder endEncoding];
+                id<MTLBlitCommandEncoder> blit = [cmd_buf blitCommandEncoder];
+                [blit synchronizeResource:buffer];
+                [blit endEncoding];
+                [cmd_buf commit];
+                [cmd_buf waitUntilCompleted];
+
+                char filename[256];
+                snprintf(filename, sizeof(filename),
+                         "/Users/a1/Vapoursynth-EEDI2METAL/dump_metal_%s.bin",
+                         name.c_str());
+                FILE* fp = fopen(filename, "wb");
+                if (fp) {
+                    const char* ptr = (const char*)[buffer contents];
+                    int h = is_2x ? height * 2 : height;
+                    size_t row_size =
+                        (size_t)width * d->vi->format->bytesPerSample;
+                    for (int y = 0; y < h; y++) {
+                        fwrite(ptr + y * metal_stride, 1, row_size, fp);
+                    }
+                    fclose(fp);
+                }
+
+                cmd_buf = [d->queue commandBuffer];
+                encoder = [cmd_buf computeCommandEncoder];
+            };
+
             auto run_kernel = [&](const std::string& name,
                                   const std::vector<id<MTLBuffer>>& buffers) {
                 id<MTLComputePipelineState> pso = get_pso(d, name);
@@ -238,6 +268,7 @@ static const VSFrameRef* VS_CC eedi2GetFrame(int n, int activationReason,
                 id<MTLComputePipelineState> pso_calc =
                     get_pso(d, "calcDirections");
                 if (pso_calc != nullptr) {
+                    dump_buffer(d->d_msk, "msk_before_calc", false);
                     [encoder setComputePipelineState:pso_calc];
                     [encoder setBuffer:d->params_buffer offset:0 atIndex:0];
                     [encoder setBuffer:d->d_src offset:0 atIndex:1];
@@ -245,11 +276,15 @@ static const VSFrameRef* VS_CC eedi2GetFrame(int n, int activationReason,
                     [encoder setBuffer:d->d_tmp offset:0 atIndex:3];
                     [encoder dispatchThreadgroups:tg_num_calc
                             threadsPerThreadgroup:tg_size_calc];
+                    dump_buffer(d->d_tmp, "dmsk_calc", false);
                 }
 
                 run_kernel("filterDirMap", {d->d_msk, d->d_tmp, d->d_dst});
+                dump_buffer(d->d_dst, "dmsk_filtered1", false);
                 run_kernel("expandDirMap", {d->d_msk, d->d_dst, d->d_tmp});
+                dump_buffer(d->d_tmp, "dmsk_expanded", false);
                 run_kernel("filterMap", {d->d_msk, d->d_tmp, d->d_dst});
+                dump_buffer(d->d_dst, "dmsk_filtered2", false);
 
                 if (d->map == 2) {
                     final_buffer = d->d_dst;
@@ -281,25 +316,30 @@ static const VSFrameRef* VS_CC eedi2GetFrame(int n, int activationReason,
                     // markDirections2X
                     run_kernel("markDirections2X",
                                {d->d_msk2, d->d_tmp2_2, d->d_tmp2});
+                    dump_buffer(d->d_tmp2, "dmsk_marked2x", true);
 
                     // filterDirMap2X
                     run_kernel("filterDirMap2X",
                                {d->d_msk2, d->d_tmp2, d->d_dst2M});
+                    dump_buffer(d->d_dst2M, "dmsk_filtered2x_1", true);
 
                     // expandDirMap2X
                     run_kernel("expandDirMap2X",
                                {d->d_msk2, d->d_dst2M, d->d_tmp2});
+                    dump_buffer(d->d_tmp2, "dmsk_expanded2x", true);
 
                     // fillGaps2X & fillGaps2XStep2 (3 passes)
                     run_kernel("fillGaps2X",
                                {d->d_msk2, d->d_tmp2, d->d_tmp2_3});
                     run_kernel("fillGaps2XStep2",
                                {d->d_msk2, d->d_tmp2, d->d_tmp2_3, d->d_dst2M});
+                    dump_buffer(d->d_dst2M, "dmsk_gaps_filled1", true);
 
                     run_kernel("fillGaps2X",
                                {d->d_msk2, d->d_dst2M, d->d_tmp2_3});
                     run_kernel("fillGaps2XStep2",
                                {d->d_msk2, d->d_dst2M, d->d_tmp2_3, d->d_tmp2});
+                    dump_buffer(d->d_tmp2, "dmsk_gaps_filled2", true);
 
                     if (d->map == 3) {
                         final_buffer = d->d_tmp2;
@@ -344,16 +384,20 @@ static const VSFrameRef* VS_CC eedi2GetFrame(int n, int activationReason,
                         run_kernel(
                             "interpolateLattice",
                             {d->d_tmp2_2, d->d_tmp2, d->d_dst2, d->d_tmp2_3});
+                        dump_buffer(d->d_dst2, "output_interp", true);
+                        dump_buffer(d->d_tmp2, "dmsk_interp", true);
 
                         if (d->pp == 1) {
                             run_kernel("filterDirMap2X",
                                        {d->d_msk2, d->d_tmp2_3, d->d_dst2M});
                             run_kernel("expandDirMap2X",
                                        {d->d_msk2, d->d_dst2M, d->d_tmp2});
+                            dump_buffer(d->d_tmp2, "dmsk_filtered", true);
                             // postProcess: d, nmsk, omsk, dst
                             // CUDA: d, tmp2, tmp2_3, dst2
                             run_kernel("postProcess",
                                        {d->d_tmp2, d->d_tmp2_3, d->d_dst2});
+                            dump_buffer(d->d_dst2, "output_pp", true);
                         }
 
                         final_buffer = d->d_dst2;

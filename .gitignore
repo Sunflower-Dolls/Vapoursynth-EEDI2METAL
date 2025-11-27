@@ -8,3 +8,4 @@ cuda-impl/
 build/*
 .vscode/*
 .cache/*
+*.bin
