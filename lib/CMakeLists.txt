@@ -18,7 +18,6 @@ set_target_properties(eedi2metal PROPERTIES
 
 find_library(METAL_FRAMEWORK Metal REQUIRED)
 find_library(FOUNDATION_FRAMEWORK Foundation REQUIRED)
-find_library(ACCELERATE_FRAMEWORK Accelerate REQUIRED)
 
 target_link_libraries(eedi2metal PUBLIC
     ${METAL_FRAMEWORK}

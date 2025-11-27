@@ -465,7 +465,9 @@ static void VS_CC eedi2Create(const VSMap* in, VSMap* out, void* /*unused*/,
         }
         d->device = devices[d->device_id];
 
-        //NOLINTBEGIN(modernize-avoid-c-arrays,cppcoreguidelines-avoid-c-arrays)
+//NOLINTBEGIN(modernize-avoid-c-arrays,cppcoreguidelines-avoid-c-arrays)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wc23-extensions"
         constexpr char utils_metal[] = {
 #embed "utils.metal"
         };
@@ -475,9 +477,10 @@ static void VS_CC eedi2Create(const VSMap* in, VSMap* out, void* /*unused*/,
         constexpr char eedi2_kernels_metal[] = {
 #embed "eedi2_kernels.metal"
         };
+#pragma clang diagnostic pop
         //NOLINTEND(modernize-avoid-c-arrays,cppcoreguidelines-avoid-c-arrays)
 
-        // Construct complete Metal source by concatenating all parts
+        // Construct complete Metal source
         std::string metal_source_str;
         metal_source_str += "#include <metal_stdlib>\n";
         metal_source_str += "using namespace metal;\n\n";
