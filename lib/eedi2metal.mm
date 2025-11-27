@@ -158,8 +158,12 @@ static const VSFrameRef* VS_CC eedi2GetFrame(int n, int activationReason,
             const int src_stride = vsapi->getStride(src_frame, plane);
             const int dst_stride = vsapi->getStride(dst_frame, plane);
 
+            const size_t metal_stride =
+                ((size_t)d->vi->width * d->vi->format->bytesPerSample + 63) &
+                ~63;
+
             // Upload
-            bitblt([d->d_src contents], src_stride,
+            bitblt([d->d_src contents], (int)metal_stride,
                    vsapi->getReadPtr(src_frame, plane), src_stride,
                    (size_t)width * d->vi->format->bytesPerSample, height);
             [d->d_src didModifyRange:NSMakeRange(0, d->d_src.length)];
@@ -168,7 +172,7 @@ static const VSFrameRef* VS_CC eedi2GetFrame(int n, int activationReason,
                 static_cast<EEDI2Param*>([d->params_buffer contents]);
             params->width = width;
             params->height = height;
-            params->d_pitch = src_stride;
+            params->d_pitch = (uint)metal_stride;
             params->subSampling = (plane > 0) ? d->vi->format->subSamplingW : 0;
             params->shift = (d->bits_per_sample == 16) ? 8 : 0;
             if (d->field > 1) {
@@ -370,7 +374,7 @@ static const VSFrameRef* VS_CC eedi2GetFrame(int n, int activationReason,
 
             // This is a temporary copy for prototyping
             bitblt(vsapi->getWritePtr(dst_frame, plane), dst_stride,
-                   [final_buffer contents], src_stride,
+                   [final_buffer contents], (int)metal_stride,
                    (size_t)width * d->vi->format->bytesPerSample,
                    (d->map == 1 || d->map == 2) ? height : height * 2);
 
