@@ -253,21 +253,6 @@ static id<MTLComputePipelineState> get_pso(EEDI2MetalData* d,
     return pso;
 }
 
-static inline void bitblt(void* dstp, int dst_stride, const void* srcp,
-                          int src_stride, size_t row_size, size_t height) {
-    if (src_stride == dst_stride && src_stride == (int)row_size) {
-        memcpy(dstp, srcp, row_size * height);
-    } else {
-        const auto* srcp8 = static_cast<const uint8_t*>(srcp);
-        auto* dstp8 = static_cast<uint8_t*>(dstp);
-        for (size_t i = 0; i < height; i++) {
-            memcpy(dstp8, srcp8, row_size);
-            srcp8 += src_stride;
-            dstp8 += dst_stride;
-        }
-    }
-}
-
 static void VS_CC eedi2Init(VSMap* /*unused*/, VSMap* /*unused*/,
                             void** instanceData, VSNode* node,
                             VSCore* /*unused*/, const VSAPI* vsapi) {
@@ -317,13 +302,13 @@ static const VSFrameRef* VS_CC eedi2GetFrame(int n, int activationReason,
 
         for (int plane = 0; plane < d->vi->format->numPlanes; ++plane) {
             if (std::ranges::find(d->planes, plane) == d->planes.end()) {
-                bitblt(vsapi->getWritePtr(dst_frame, plane),
-                       vsapi->getStride(dst_frame, plane),
-                       vsapi->getReadPtr(src_frame, plane),
-                       vsapi->getStride(src_frame, plane),
-                       (size_t)vsapi->getFrameWidth(src_frame, plane) *
-                           d->vi->format->bytesPerSample,
-                       vsapi->getFrameHeight(src_frame, plane));
+                vs_bitblt(vsapi->getWritePtr(dst_frame, plane),
+                          vsapi->getStride(dst_frame, plane),
+                          vsapi->getReadPtr(src_frame, plane),
+                          vsapi->getStride(src_frame, plane),
+                          (size_t)vsapi->getFrameWidth(src_frame, plane) *
+                              d->vi->format->bytesPerSample,
+                          vsapi->getFrameHeight(src_frame, plane));
                 continue;
             }
 
