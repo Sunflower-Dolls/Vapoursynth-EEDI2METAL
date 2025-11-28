@@ -13,6 +13,11 @@ add_library(eedi2metal SHARED
 )
 
 target_include_directories(eedi2metal PRIVATE ${VAPOURSYNTH_INCLUDE_DIRS})
+option(DUMP_METAL_BUFFERS "Enable dumping of intermediate Metal buffers" OFF)
+
+if(DUMP_METAL_BUFFERS)
+    target_compile_definitions(eedi2metal PRIVATE DUMP_METAL_BUFFERS)
+endif()
 
 set_target_properties(eedi2metal PROPERTIES 
     CXX_FLAGS "-Wno-c23-extensions -mmacosx-version-min=12.0"

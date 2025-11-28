@@ -222,7 +222,7 @@ kernel void KERNEL_NAME(calcDirections)(constant EEDI2Param &d [[buffer(0)]],
     const uint pitch = d.d_pitch;
     const uint shift = d.shift;
     const TYPE peak = numeric_limits<TYPE>::max();
-    const TYPE neutral = peak / 2;
+    const TYPE neutral = peak / 2 + 1;
     const uint shift2 = shift + 2;
 
     if (pos_y >= height)
@@ -424,7 +424,7 @@ kernel void KERNEL_NAME(filterDirMap)(constant EEDI2Param &d [[buffer(0)]],
 
     const uint pitch = d.d_pitch;
     const TYPE peak = numeric_limits<TYPE>::max();
-    const TYPE neutral = peak / 2;
+    const TYPE neutral = peak / 2 + 1;
     const uint shift = d.shift;
     const uint shift2 = shift + 2;
 
@@ -496,7 +496,7 @@ kernel void KERNEL_NAME(expandDirMap)(constant EEDI2Param &d [[buffer(0)]],
 
     const uint pitch = d.d_pitch;
     const TYPE peak = numeric_limits<TYPE>::max();
-    const TYPE neutral = peak / 2;
+    const TYPE neutral = peak / 2 + 1;
     const uint shift = d.shift;
     const uint shift2 = shift + 2;
 
@@ -563,7 +563,7 @@ kernel void KERNEL_NAME(filterMap)(constant EEDI2Param &d [[buffer(0)]],
 
     const uint pitch = d.d_pitch;
     const TYPE peak = numeric_limits<TYPE>::max();
-    const TYPE neutral = peak / 2;
+    const TYPE neutral = peak / 2 + 1;
     const uint shift = d.shift;
     const uint shift2 = shift + 2;
 
@@ -632,7 +632,7 @@ kernel void KERNEL_NAME(markDirections2X)(constant EEDI2Param &d [[buffer(0)]],
 
     const uint pitch = d.d_pitch;
     const TYPE peak = numeric_limits<TYPE>::max();
-    const TYPE neutral = peak / 2;
+    const TYPE neutral = peak / 2 + 1;
     const uint shift = d.shift;
     const uint shift2 = shift + 2;
 
@@ -711,7 +711,7 @@ kernel void KERNEL_NAME(filterDirMap2X)(constant EEDI2Param &d [[buffer(0)]],
 
     const uint pitch = d.d_pitch;
     const TYPE peak = numeric_limits<TYPE>::max();
-    const TYPE neutral = peak / 2;
+    const TYPE neutral = peak / 2 + 1;
     const uint shift = d.shift;
     const uint shift2 = shift + 2;
 
@@ -796,7 +796,7 @@ kernel void KERNEL_NAME(expandDirMap2X)(constant EEDI2Param &d [[buffer(0)]],
 
     const uint pitch = d.d_pitch;
     const TYPE peak = numeric_limits<TYPE>::max();
-    const TYPE neutral = peak / 2;
+    const TYPE neutral = peak / 2 + 1;
     const uint shift = d.shift;
     const uint shift2 = shift + 2;
 
@@ -875,7 +875,7 @@ kernel void KERNEL_NAME(fillGaps2X)(constant EEDI2Param &d [[buffer(0)]],
 
     const uint pitch = d.d_pitch;
     const TYPE peak = numeric_limits<TYPE>::max();
-    const TYPE neutral = peak / 2;
+    const TYPE neutral = peak / 2 + 1;
     const uint shift = d.shift;
     const uint shift2 = shift + 2;
     const TYPE fiveHundred = 500 << shift;
@@ -1029,6 +1029,8 @@ kernel void KERNEL_NAME(fillGaps2XStep2)(
         back + round_div((forward - back) * (int(pos.x) - 1 - u), (v - u));
 }
 
+// In the CPU implementation, `dmskp` has serial data dependencies.
+// Here, we adopt the approach used in the EEDI2CUDA.
 kernel void KERNEL_NAME(interpolateLattice)(
     constant EEDI2Param &d [[buffer(0)]], const device TYPE *omsk [[buffer(1)]],
     const device TYPE *dmsk [[buffer(2)]], device TYPE *dst [[buffer(3)]],
@@ -1043,7 +1045,7 @@ kernel void KERNEL_NAME(interpolateLattice)(
 
     const uint pitch = d.d_pitch;
     const TYPE peak = numeric_limits<TYPE>::max();
-    const TYPE neutral = peak / 2;
+    const TYPE neutral = peak / 2 + 1;
     const uint shift = d.shift;
     const uint shift2 = shift + 2;
     const TYPE three = 3 << shift;
@@ -1232,7 +1234,7 @@ kernel void KERNEL_NAME(postProcess)(constant EEDI2Param &d [[buffer(0)]],
 
     const uint pitch = d.d_pitch;
     const TYPE peak = numeric_limits<TYPE>::max();
-    const TYPE neutral = peak / 2;
+    const TYPE neutral = peak / 2 + 1;
     const uint shift = d.shift;
     const uint shift2 = shift + 2;
 

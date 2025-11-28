@@ -20,7 +20,7 @@
 #import <Metal/Metal.h>
 
 #include <algorithm>
-#include <cstdio>
+#include <fstream>
 #include <map>
 #include <memory>
 #include <string>
@@ -206,6 +206,7 @@ static const VSFrameRef* VS_CC eedi2GetFrame(int n, int activationReason,
                 (height + threadsPerGroup.height - 1) / threadsPerGroup.height,
                 1);
 
+#ifdef DUMP_METAL_BUFFERS
             auto dump_buffer = [&](id<MTLBuffer> buffer,
                                    const std::string& name, bool is_2x) {
                 [encoder endEncoding];
@@ -215,25 +216,26 @@ static const VSFrameRef* VS_CC eedi2GetFrame(int n, int activationReason,
                 [cmd_buf commit];
                 [cmd_buf waitUntilCompleted];
 
-                char filename[256];
-                snprintf(filename, sizeof(filename),
-                         "/Users/a1/Vapoursynth-EEDI2METAL/dump_metal_%s.bin",
-                         name.c_str());
-                FILE* fp = fopen(filename, "wb");
-                if (fp) {
+                std::string filename_str = "dump_metal_" + name + ".bin";
+                std::ofstream ofs(filename_str, std::ios::binary);
+                if (ofs) {
                     const char* ptr = (const char*)[buffer contents];
                     int h = is_2x ? height * 2 : height;
                     size_t row_size =
                         (size_t)width * d->vi->format->bytesPerSample;
                     for (int y = 0; y < h; y++) {
-                        fwrite(ptr + y * metal_stride, 1, row_size, fp);
+                        ofs.write(ptr + y * metal_stride, row_size);
                     }
-                    fclose(fp);
                 }
 
                 cmd_buf = [d->queue commandBuffer];
                 encoder = [cmd_buf computeCommandEncoder];
             };
+#else
+            auto dump_buffer = [&](id<MTLBuffer> /*buffer*/,
+                                   const std::string& /*name*/,
+                                   bool /*is_2x*/) { /* Do nothing */ };
+#endif
 
             auto run_kernel = [&](const std::string& name,
                                   const std::vector<id<MTLBuffer>>& buffers) {
@@ -696,7 +698,7 @@ static void VS_CC eedi2Create(const VSMap* in, VSMap* out, void* /*unused*/,
     }
 
     vsapi->createFilter(in, out, "EEDI2", eedi2Init, eedi2GetFrame, eedi2Free,
-                        fmParallel, 0, d.release(), core);
+                        fmParallelRequests, 0, d.release(), core);
 }
 
 VS_EXTERNAL_API(void)
