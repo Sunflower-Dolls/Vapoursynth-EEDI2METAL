@@ -36,7 +36,6 @@ constant int limlut[33] = {6,  6,  7,  7,  8,  8,  9,  9,  9,  10, 10,
 #define KERNEL_NAME_INTERNAL(name, suffix) PASTE(name, suffix)
 #define KERNEL_NAME(name) KERNEL_NAME_INTERNAL(name, SUFFIX)
 
-// MARK: - Helpers
 template <typename T> METAL_FUNC T mmax(T last) { return last; }
 
 template <typename T, typename... Args>

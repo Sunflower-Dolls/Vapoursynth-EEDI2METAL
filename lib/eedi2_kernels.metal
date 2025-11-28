@@ -30,7 +30,6 @@
     ((device TYPE *)((device char *)p + (pos.y + (y_off)) * pitch))
 #define GET_POINT(line, x_off) line[pos.x + (x_off)]
 
-// MARK: - Kernels
 kernel void KERNEL_NAME(buildEdgeMask)(constant EEDI2Param &d [[buffer(0)]],
                                        const device TYPE *src [[buffer(1)]],
                                        device TYPE *dst [[buffer(2)]],
@@ -248,17 +247,6 @@ kernel void KERNEL_NAME(calcDirections)(constant EEDI2Param &d [[buffer(0)]],
     threadgroup int s2p[128], s1p[128], s[128], s1n[128], s2n[128];
     threadgroup int m1p[128], m1n[128];
 
-    // Zero-initialize shared memory to prevent reading uninitialized values at
-    // edges
-    if (t_idx < 128) {
-        s2p[t_idx] = 0;
-        s1p[t_idx] = 0;
-        s[t_idx] = 0;
-        s1n[t_idx] = 0;
-        s2n[t_idx] = 0;
-        m1p[t_idx] = 0;
-        m1n[t_idx] = 0;
-    }
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
     constexpr int block_w = 64;
@@ -997,20 +985,17 @@ kernel void KERNEL_NAME(fillGaps2XStep2)(
     uint uv = 0;
     uint pos_found = 0;
 
-    // Search backward from current position
     for (uint i = max((int)pos.x - 16, 1); i < pos.x; ++i) {
         bool cond = i + (tmpp[i] >> 8) > pos.x;
         uv = cond ? tmpp[i] : uv;
         pos_found = cond ? i : pos_found;
     }
 
-    // Check current position
     if (tmpp[pos.x]) {
         uv = tmpp[pos.x];
         pos_found = pos.x;
     }
 
-    // Search forward from current position
     for (uint i = pos.x + 1; i - pos.x < 16 && i < width - 1; ++i) {
         bool cond = i - (tmpp[i] & 255u) < pos.x;
         uv = cond ? tmpp[i] : uv;
@@ -1255,6 +1240,18 @@ kernel void KERNEL_NAME(postProcess)(constant EEDI2Param &d [[buffer(0)]],
     if (abs(nmskp[pos.x] - omskp[pos.x]) > lim && omskp[pos.x] != peak &&
         omskp[pos.x] != neutral)
         dstp[pos.x] = (dstpp[pos.x] + dstpn[pos.x] + 1) / 2;
+}
+
+kernel void KERNEL_NAME(copy_buffer)(const device uchar *src [[buffer(0)]],
+                                     device uchar *dst [[buffer(1)]],
+                                     constant uint &src_stride [[buffer(2)]],
+                                     constant uint &dst_stride [[buffer(3)]],
+                                     constant uint &width_bytes [[buffer(4)]],
+                                     uint2 pos [[thread_position_in_grid]]) {
+    if (pos.x >= width_bytes)
+        return;
+
+    dst[pos.y * dst_stride + pos.x] = src[pos.y * src_stride + pos.x];
 }
 
 #undef GET_LINE
