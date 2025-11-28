@@ -23,7 +23,10 @@
 #include <fstream>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include <VSHelper.h>
@@ -39,6 +42,20 @@ struct EEDI2Param {
 };
 
 using namespace std::string_literals;
+
+struct BufferSet {
+    id<MTLBuffer> d_src;
+    id<MTLBuffer> d_msk;
+    id<MTLBuffer> d_tmp;
+    id<MTLBuffer> d_dst;
+    id<MTLBuffer> d_dst2;
+    id<MTLBuffer> d_msk2;
+    id<MTLBuffer> d_tmp2;
+    id<MTLBuffer> d_tmp2_2;
+    id<MTLBuffer> d_tmp2_3;
+    id<MTLBuffer> d_dst2M;
+    id<MTLBuffer> params_buffer;
+};
 
 struct EEDI2MetalData {
     VSNodeRef* node;
@@ -59,21 +76,14 @@ struct EEDI2MetalData {
     id<MTLLibrary> library;
     NSDictionary<NSString*, id<MTLComputePipelineState>>* psos;
 
-    // Buffers
-    id<MTLBuffer> d_src; // Holds the source plane
-    id<MTLBuffer> d_msk; // The edge mask
-    id<MTLBuffer> d_tmp; // A temporary buffer, same size as msk
-    id<MTLBuffer> d_dst; // The direction map / final non-2x output
+    // Per-thread buffer management
+    std::unordered_map<std::thread::id, BufferSet> thread_buffers;
+    std::mutex buffer_mutex;
 
-    // 2x Buffers
-    id<MTLBuffer> d_dst2;
-    id<MTLBuffer> d_msk2;
-    id<MTLBuffer> d_tmp2;
-    id<MTLBuffer> d_tmp2_2;
-    id<MTLBuffer> d_tmp2_3;
-    id<MTLBuffer> d_dst2M;
-
-    id<MTLBuffer> params_buffer;
+    // Buffer size parameters (for allocation)
+    size_t stride;
+    size_t plane_size;
+    size_t plane_size_2x;
 };
 
 static id<MTLComputePipelineState> get_pso(EEDI2MetalData* d,
@@ -86,6 +96,63 @@ static id<MTLComputePipelineState> get_pso(EEDI2MetalData* d,
                                  " not found!");
     }
     return pso;
+}
+
+static BufferSet* getOrCreateBufferSet(EEDI2MetalData* d) {
+    std::thread::id thread_id = std::this_thread::get_id();
+
+    {
+        std::lock_guard<std::mutex> lock(d->buffer_mutex);
+        auto it = d->thread_buffers.find(thread_id);
+        if (it != d->thread_buffers.end()) {
+            return &it->second;
+        }
+    }
+
+    BufferSet new_buffers;
+    MTLResourceOptions options = MTLResourceStorageModeManaged;
+
+    new_buffers.d_src = [d->device newBufferWithLength:d->plane_size
+                                               options:options];
+    new_buffers.d_msk = [d->device newBufferWithLength:d->plane_size
+                                               options:options];
+    new_buffers.d_tmp = [d->device newBufferWithLength:d->plane_size
+                                               options:options];
+    new_buffers.d_dst = [d->device newBufferWithLength:d->plane_size
+                                               options:options];
+
+    if (d->map == 0 || d->map == 3) {
+        new_buffers.d_dst2 = [d->device newBufferWithLength:d->plane_size_2x
+                                                    options:options];
+        new_buffers.d_msk2 = [d->device newBufferWithLength:d->plane_size_2x
+                                                    options:options];
+        new_buffers.d_tmp2 = [d->device newBufferWithLength:d->plane_size_2x
+                                                    options:options];
+        new_buffers.d_tmp2_2 = [d->device newBufferWithLength:d->plane_size_2x
+                                                      options:options];
+        new_buffers.d_tmp2_3 = [d->device newBufferWithLength:d->plane_size_2x
+                                                      options:options];
+        new_buffers.d_dst2M = [d->device newBufferWithLength:d->plane_size_2x
+                                                     options:options];
+    } else {
+        new_buffers.d_dst2 = nil;
+        new_buffers.d_msk2 = nil;
+        new_buffers.d_tmp2 = nil;
+        new_buffers.d_tmp2_2 = nil;
+        new_buffers.d_tmp2_3 = nil;
+        new_buffers.d_dst2M = nil;
+    }
+
+    new_buffers.params_buffer =
+        [d->device newBufferWithLength:sizeof(EEDI2Param)
+                               options:MTLResourceStorageModeShared];
+
+    {
+        std::lock_guard<std::mutex> lock(d->buffer_mutex);
+        auto result =
+            d->thread_buffers.emplace(thread_id, std::move(new_buffers));
+        return &result.first->second;
+    }
 }
 
 static inline void bitblt(void* dstp, int dst_stride, const void* srcp,
@@ -154,6 +221,8 @@ static const VSFrameRef* VS_CC eedi2GetFrame(int n, int activationReason,
                 continue;
             }
 
+            BufferSet* buffers = getOrCreateBufferSet(d);
+
             const int width = vsapi->getFrameWidth(src_frame, plane);
             const int height = vsapi->getFrameHeight(src_frame, plane);
             const int src_stride = vsapi->getStride(src_frame, plane);
@@ -164,13 +233,14 @@ static const VSFrameRef* VS_CC eedi2GetFrame(int n, int activationReason,
                 ~63;
 
             // Upload
-            bitblt([d->d_src contents], (int)metal_stride,
+            bitblt([buffers->d_src contents], (int)metal_stride,
                    vsapi->getReadPtr(src_frame, plane), src_stride,
                    (size_t)width * d->vi->format->bytesPerSample, height);
-            [d->d_src didModifyRange:NSMakeRange(0, d->d_src.length)];
+            [buffers->d_src
+                didModifyRange:NSMakeRange(0, buffers->d_src.length)];
 
             auto* params =
-                static_cast<EEDI2Param*>([d->params_buffer contents]);
+                static_cast<EEDI2Param*>([buffers->params_buffer contents]);
             params->width = width;
             params->height = height;
             params->d_pitch = (uint)metal_stride;
@@ -237,31 +307,37 @@ static const VSFrameRef* VS_CC eedi2GetFrame(int n, int activationReason,
                                    bool /*is_2x*/) { /* Do nothing */ };
 #endif
 
-            auto run_kernel = [&](const std::string& name,
-                                  const std::vector<id<MTLBuffer>>& buffers) {
-                id<MTLComputePipelineState> pso = get_pso(d, name);
-                if (!pso) {
-                    return;
-                }
-                [encoder setComputePipelineState:pso];
-                [encoder setBuffer:d->params_buffer offset:0 atIndex:0];
-                for (int i = 0; i < static_cast<int>(buffers.size()); ++i) {
-                    [encoder setBuffer:buffers[i] offset:0 atIndex:i + 1];
-                }
-                [encoder dispatchThreadgroups:numThreadgroups
-                        threadsPerThreadgroup:threadsPerGroup];
-            };
+            auto run_kernel =
+                [&](const std::string& name,
+                    const std::vector<id<MTLBuffer>>& kernel_buffers) {
+                    id<MTLComputePipelineState> pso = get_pso(d, name);
+                    if (!pso) {
+                        return;
+                    }
+                    [encoder setComputePipelineState:pso];
+                    [encoder setBuffer:buffers->params_buffer
+                                offset:0
+                               atIndex:0];
+                    for (int i = 0; i < static_cast<int>(kernel_buffers.size());
+                         ++i) {
+                        [encoder setBuffer:kernel_buffers[i]
+                                    offset:0
+                                   atIndex:i + 1];
+                    }
+                    [encoder dispatchThreadgroups:numThreadgroups
+                            threadsPerThreadgroup:threadsPerGroup];
+                };
 
-            run_kernel("buildEdgeMask", {d->d_src, d->d_msk});
-            run_kernel("erode", {d->d_msk, d->d_tmp});
-            run_kernel("dilate", {d->d_tmp, d->d_msk});
-            run_kernel("erode", {d->d_msk, d->d_tmp});
-            run_kernel("removeSmallHorzGaps", {d->d_tmp, d->d_msk});
+            run_kernel("buildEdgeMask", {buffers->d_src, buffers->d_msk});
+            run_kernel("erode", {buffers->d_msk, buffers->d_tmp});
+            run_kernel("dilate", {buffers->d_tmp, buffers->d_msk});
+            run_kernel("erode", {buffers->d_msk, buffers->d_tmp});
+            run_kernel("removeSmallHorzGaps", {buffers->d_tmp, buffers->d_msk});
 
             id<MTLBuffer> final_buffer;
 
             if (d->map == 1) { // view edge mask
-                final_buffer = d->d_msk;
+                final_buffer = buffers->d_msk;
             } else { // full pipeline
                 MTLSize tg_size_calc = MTLSizeMake(64, 1, 1);
                 MTLSize tg_num_calc = MTLSizeMake(
@@ -272,35 +348,40 @@ static const VSFrameRef* VS_CC eedi2GetFrame(int n, int activationReason,
                     get_pso(d, "calcDirections");
                 if (pso_calc != nullptr) {
                     if (plane == 0) {
-                        dump_buffer(d->d_msk, "msk_before_calc", false);
+                        dump_buffer(buffers->d_msk, "msk_before_calc", false);
                     }
                     [encoder setComputePipelineState:pso_calc];
-                    [encoder setBuffer:d->params_buffer offset:0 atIndex:0];
-                    [encoder setBuffer:d->d_src offset:0 atIndex:1];
-                    [encoder setBuffer:d->d_msk offset:0 atIndex:2];
-                    [encoder setBuffer:d->d_tmp offset:0 atIndex:3];
+                    [encoder setBuffer:buffers->params_buffer
+                                offset:0
+                               atIndex:0];
+                    [encoder setBuffer:buffers->d_src offset:0 atIndex:1];
+                    [encoder setBuffer:buffers->d_msk offset:0 atIndex:2];
+                    [encoder setBuffer:buffers->d_tmp offset:0 atIndex:3];
                     [encoder dispatchThreadgroups:tg_num_calc
                             threadsPerThreadgroup:tg_size_calc];
                     if (plane == 0) {
-                        dump_buffer(d->d_tmp, "dmsk_calc", false);
+                        dump_buffer(buffers->d_tmp, "dmsk_calc", false);
                     }
                 }
 
-                run_kernel("filterDirMap", {d->d_msk, d->d_tmp, d->d_dst});
+                run_kernel("filterDirMap",
+                           {buffers->d_msk, buffers->d_tmp, buffers->d_dst});
                 if (plane == 0) {
-                    dump_buffer(d->d_dst, "dmsk_filtered1", false);
+                    dump_buffer(buffers->d_dst, "dmsk_filtered1", false);
                 }
-                run_kernel("expandDirMap", {d->d_msk, d->d_dst, d->d_tmp});
+                run_kernel("expandDirMap",
+                           {buffers->d_msk, buffers->d_dst, buffers->d_tmp});
                 if (plane == 0) {
-                    dump_buffer(d->d_tmp, "dmsk_expanded", false);
+                    dump_buffer(buffers->d_tmp, "dmsk_expanded", false);
                 }
-                run_kernel("filterMap", {d->d_msk, d->d_tmp, d->d_dst});
+                run_kernel("filterMap",
+                           {buffers->d_msk, buffers->d_tmp, buffers->d_dst});
                 if (plane == 0) {
-                    dump_buffer(d->d_dst, "dmsk_filtered2", false);
+                    dump_buffer(buffers->d_dst, "dmsk_filtered2", false);
                 }
 
                 if (d->map == 2) {
-                    final_buffer = d->d_dst;
+                    final_buffer = buffers->d_dst;
                 } else {
                     // 2x Upscaling Pipeline
 
@@ -309,63 +390,70 @@ static const VSFrameRef* VS_CC eedi2GetFrame(int n, int activationReason,
 
                     id<MTLBlitCommandEncoder> blit =
                         [cmd_buf blitCommandEncoder];
-                    [blit fillBuffer:d->d_dst2
-                               range:NSMakeRange(0, d->d_dst2.length)
+                    [blit fillBuffer:buffers->d_dst2
+                               range:NSMakeRange(0, buffers->d_dst2.length)
                                value:0];
                     // tmp2 needs to be filled with 255 (peak for 8bit) or 65535 (peak for 16bit)
                     // If 16-bit, we need to fill with 0xFF.
-                    [blit fillBuffer:d->d_tmp2
-                               range:NSMakeRange(0, d->d_tmp2.length)
+                    [blit fillBuffer:buffers->d_tmp2
+                               range:NSMakeRange(0, buffers->d_tmp2.length)
                                value:0xFF];
                     [blit endEncoding];
 
                     encoder = [cmd_buf computeCommandEncoder];
 
-                    run_kernel("enlarge2", {d->d_src, d->d_dst2});
-                    run_kernel("enlarge2", {d->d_dst, d->d_tmp2_2});
-                    run_kernel("enlarge2", {d->d_msk, d->d_msk2});
+                    run_kernel("enlarge2", {buffers->d_src, buffers->d_dst2});
+                    run_kernel("enlarge2", {buffers->d_dst, buffers->d_tmp2_2});
+                    run_kernel("enlarge2", {buffers->d_msk, buffers->d_msk2});
 
                     // 2x Kernels
                     // markDirections2X
-                    run_kernel("markDirections2X",
-                               {d->d_msk2, d->d_tmp2_2, d->d_tmp2});
+                    run_kernel(
+                        "markDirections2X",
+                        {buffers->d_msk2, buffers->d_tmp2_2, buffers->d_tmp2});
                     if (plane == 0) {
-                        dump_buffer(d->d_tmp2, "dmsk_marked2x", true);
+                        dump_buffer(buffers->d_tmp2, "dmsk_marked2x", true);
                     }
 
                     // filterDirMap2X
-                    run_kernel("filterDirMap2X",
-                               {d->d_msk2, d->d_tmp2, d->d_dst2M});
+                    run_kernel(
+                        "filterDirMap2X",
+                        {buffers->d_msk2, buffers->d_tmp2, buffers->d_dst2M});
                     if (plane == 0) {
-                        dump_buffer(d->d_dst2M, "dmsk_filtered2x_1", true);
+                        dump_buffer(buffers->d_dst2M, "dmsk_filtered2x_1",
+                                    true);
                     }
 
                     // expandDirMap2X
-                    run_kernel("expandDirMap2X",
-                               {d->d_msk2, d->d_dst2M, d->d_tmp2});
+                    run_kernel(
+                        "expandDirMap2X",
+                        {buffers->d_msk2, buffers->d_dst2M, buffers->d_tmp2});
                     if (plane == 0) {
-                        dump_buffer(d->d_tmp2, "dmsk_expanded2x", true);
+                        dump_buffer(buffers->d_tmp2, "dmsk_expanded2x", true);
                     }
 
                     // fillGaps2X & fillGaps2XStep2 (3 passes)
-                    run_kernel("fillGaps2X",
-                               {d->d_msk2, d->d_tmp2, d->d_tmp2_3});
+                    run_kernel("fillGaps2X", {buffers->d_msk2, buffers->d_tmp2,
+                                              buffers->d_tmp2_3});
                     run_kernel("fillGaps2XStep2",
-                               {d->d_msk2, d->d_tmp2, d->d_tmp2_3, d->d_dst2M});
+                               {buffers->d_msk2, buffers->d_tmp2,
+                                buffers->d_tmp2_3, buffers->d_dst2M});
                     if (plane == 0) {
-                        dump_buffer(d->d_dst2M, "dmsk_gaps_filled1", true);
+                        dump_buffer(buffers->d_dst2M, "dmsk_gaps_filled1",
+                                    true);
                     }
 
-                    run_kernel("fillGaps2X",
-                               {d->d_msk2, d->d_dst2M, d->d_tmp2_3});
+                    run_kernel("fillGaps2X", {buffers->d_msk2, buffers->d_dst2M,
+                                              buffers->d_tmp2_3});
                     run_kernel("fillGaps2XStep2",
-                               {d->d_msk2, d->d_dst2M, d->d_tmp2_3, d->d_tmp2});
+                               {buffers->d_msk2, buffers->d_dst2M,
+                                buffers->d_tmp2_3, buffers->d_tmp2});
                     if (plane == 0) {
-                        dump_buffer(d->d_tmp2, "dmsk_gaps_filled2", true);
+                        dump_buffer(buffers->d_tmp2, "dmsk_gaps_filled2", true);
                     }
 
                     if (d->map == 3) {
-                        final_buffer = d->d_tmp2;
+                        final_buffer = buffers->d_tmp2;
                     } else {
                         [encoder endEncoding];
                         id<MTLBlitCommandEncoder> blit =
@@ -379,57 +467,61 @@ static const VSFrameRef* VS_CC eedi2GetFrame(int n, int activationReason,
 
                         if (current_field !=
                             0) { // field == 1, copy line height*2-2 to height*2-1
-                            [blit copyFromBuffer:d->d_dst2
+                            [blit copyFromBuffer:buffers->d_dst2
                                      sourceOffset:pitch * (height * 2 - 2)
-                                         toBuffer:d->d_dst2
+                                         toBuffer:buffers->d_dst2
                                 destinationOffset:pitch * (height * 2 - 1)
                                              size:width_bytes];
                         } else { // field == 0, copy line 1 to 0
-                            [blit copyFromBuffer:d->d_dst2
+                            [blit copyFromBuffer:buffers->d_dst2
                                      sourceOffset:pitch
-                                         toBuffer:d->d_dst2
+                                         toBuffer:buffers->d_dst2
                                 destinationOffset:0
                                              size:width_bytes];
                         }
 
                         // Copy tmp2 -> tmp2_3
-                        [blit copyFromBuffer:d->d_tmp2
+                        [blit copyFromBuffer:buffers->d_tmp2
                                  sourceOffset:0
-                                     toBuffer:d->d_tmp2_3
+                                     toBuffer:buffers->d_tmp2_3
                             destinationOffset:0
-                                         size:d->d_tmp2.length];
+                                         size:buffers->d_tmp2.length];
                         [blit endEncoding];
                         encoder = [cmd_buf computeCommandEncoder];
 
                         // interpolateLattice
                         // Args: d, omsk, dmsk, dst, dmsk_2
                         // CUDA: d, tmp2_2, tmp2, dst2, tmp2_3
-                        run_kernel(
-                            "interpolateLattice",
-                            {d->d_tmp2_2, d->d_tmp2, d->d_dst2, d->d_tmp2_3});
+                        run_kernel("interpolateLattice",
+                                   {buffers->d_tmp2_2, buffers->d_tmp2,
+                                    buffers->d_dst2, buffers->d_tmp2_3});
                         if (plane == 0) {
-                            dump_buffer(d->d_dst2, "output_interp", true);
-                            dump_buffer(d->d_tmp2, "dmsk_interp", true);
+                            dump_buffer(buffers->d_dst2, "output_interp", true);
+                            dump_buffer(buffers->d_tmp2, "dmsk_interp", true);
                         }
 
                         if (d->pp == 1) {
                             run_kernel("filterDirMap2X",
-                                       {d->d_msk2, d->d_tmp2_3, d->d_dst2M});
+                                       {buffers->d_msk2, buffers->d_tmp2_3,
+                                        buffers->d_dst2M});
                             run_kernel("expandDirMap2X",
-                                       {d->d_msk2, d->d_dst2M, d->d_tmp2});
+                                       {buffers->d_msk2, buffers->d_dst2M,
+                                        buffers->d_tmp2});
                             if (plane == 0) {
-                                dump_buffer(d->d_tmp2, "dmsk_filtered", true);
+                                dump_buffer(buffers->d_tmp2, "dmsk_filtered",
+                                            true);
                             }
                             // postProcess: d, nmsk, omsk, dst
                             // CUDA: d, tmp2, tmp2_3, dst2
                             run_kernel("postProcess",
-                                       {d->d_tmp2, d->d_tmp2_3, d->d_dst2});
+                                       {buffers->d_tmp2, buffers->d_tmp2_3,
+                                        buffers->d_dst2});
                             if (plane == 0) {
-                                dump_buffer(d->d_dst2, "output_pp", true);
+                                dump_buffer(buffers->d_dst2, "output_pp", true);
                             }
                         }
 
-                        final_buffer = d->d_dst2;
+                        final_buffer = buffers->d_dst2;
                     }
                 }
             }
@@ -663,42 +755,16 @@ static void VS_CC eedi2Create(const VSMap* in, VSMap* out, void* /*unused*/,
         }
         d->psos = psos;
 
-        // Calculate plane size based on max possible stride
-        // For plane 0: width * bytesPerSample, aligned to some reasonable value
-        size_t stride =
+        // Store buffer size parameters for per-thread allocation
+        d->stride =
             ((size_t)d->vi->width * d->vi->format->bytesPerSample + 63) &
             ~63; // 64-byte alignment
-        size_t plane_size = (size_t)d->vi->height * stride;
-        size_t plane_size_2x = plane_size * 2;
-
-        MTLResourceOptions options = MTLResourceStorageModeManaged;
-        d->d_src = [d->device newBufferWithLength:plane_size options:options];
-        d->d_msk = [d->device newBufferWithLength:plane_size options:options];
-        d->d_tmp = [d->device newBufferWithLength:plane_size options:options];
-        d->d_dst = [d->device newBufferWithLength:plane_size options:options];
-
-        if (d->map == 0 || d->map == 3) {
-            d->d_dst2 = [d->device newBufferWithLength:plane_size_2x
-                                               options:options];
-            d->d_msk2 = [d->device newBufferWithLength:plane_size_2x
-                                               options:options];
-            d->d_tmp2 = [d->device newBufferWithLength:plane_size_2x
-                                               options:options];
-            d->d_tmp2_2 = [d->device newBufferWithLength:plane_size_2x
-                                                 options:options];
-            d->d_tmp2_3 = [d->device newBufferWithLength:plane_size_2x
-                                                 options:options];
-            d->d_dst2M = [d->device newBufferWithLength:plane_size_2x
-                                                options:options];
-        }
-
-        d->params_buffer =
-            [d->device newBufferWithLength:sizeof(EEDI2Param)
-                                   options:MTLResourceStorageModeShared];
+        d->plane_size = (size_t)d->vi->height * d->stride;
+        d->plane_size_2x = d->plane_size * 2;
     }
 
     vsapi->createFilter(in, out, "EEDI2", eedi2Init, eedi2GetFrame, eedi2Free,
-                        fmParallelRequests, 0, d.release(), core);
+                        fmParallel, 0, d.release(), core);
 }
 
 VS_EXTERNAL_API(void)
