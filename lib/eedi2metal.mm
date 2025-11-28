@@ -186,6 +186,7 @@ static const VSFrameRef* VS_CC eedi2GetFrame(int n, int activationReason,
                 params->field = d->field;
             }
             params->mthresh = d->mthresh * d->mthresh;
+            params->lthresh = d->lthresh;
             params->vthresh = d->vthresh * 81;
             unsigned nt_shifted = d->nt << params->shift;
             params->nt4 = nt_shifted * 4;
@@ -268,7 +269,9 @@ static const VSFrameRef* VS_CC eedi2GetFrame(int n, int activationReason,
                 id<MTLComputePipelineState> pso_calc =
                     get_pso(d, "calcDirections");
                 if (pso_calc != nullptr) {
-                    dump_buffer(d->d_msk, "msk_before_calc", false);
+                    if (plane == 0) {
+                        dump_buffer(d->d_msk, "msk_before_calc", false);
+                    }
                     [encoder setComputePipelineState:pso_calc];
                     [encoder setBuffer:d->params_buffer offset:0 atIndex:0];
                     [encoder setBuffer:d->d_src offset:0 atIndex:1];
@@ -276,15 +279,23 @@ static const VSFrameRef* VS_CC eedi2GetFrame(int n, int activationReason,
                     [encoder setBuffer:d->d_tmp offset:0 atIndex:3];
                     [encoder dispatchThreadgroups:tg_num_calc
                             threadsPerThreadgroup:tg_size_calc];
-                    dump_buffer(d->d_tmp, "dmsk_calc", false);
+                    if (plane == 0) {
+                        dump_buffer(d->d_tmp, "dmsk_calc", false);
+                    }
                 }
 
                 run_kernel("filterDirMap", {d->d_msk, d->d_tmp, d->d_dst});
-                dump_buffer(d->d_dst, "dmsk_filtered1", false);
+                if (plane == 0) {
+                    dump_buffer(d->d_dst, "dmsk_filtered1", false);
+                }
                 run_kernel("expandDirMap", {d->d_msk, d->d_dst, d->d_tmp});
-                dump_buffer(d->d_tmp, "dmsk_expanded", false);
+                if (plane == 0) {
+                    dump_buffer(d->d_tmp, "dmsk_expanded", false);
+                }
                 run_kernel("filterMap", {d->d_msk, d->d_tmp, d->d_dst});
-                dump_buffer(d->d_dst, "dmsk_filtered2", false);
+                if (plane == 0) {
+                    dump_buffer(d->d_dst, "dmsk_filtered2", false);
+                }
 
                 if (d->map == 2) {
                     final_buffer = d->d_dst;
@@ -316,30 +327,40 @@ static const VSFrameRef* VS_CC eedi2GetFrame(int n, int activationReason,
                     // markDirections2X
                     run_kernel("markDirections2X",
                                {d->d_msk2, d->d_tmp2_2, d->d_tmp2});
-                    dump_buffer(d->d_tmp2, "dmsk_marked2x", true);
+                    if (plane == 0) {
+                        dump_buffer(d->d_tmp2, "dmsk_marked2x", true);
+                    }
 
                     // filterDirMap2X
                     run_kernel("filterDirMap2X",
                                {d->d_msk2, d->d_tmp2, d->d_dst2M});
-                    dump_buffer(d->d_dst2M, "dmsk_filtered2x_1", true);
+                    if (plane == 0) {
+                        dump_buffer(d->d_dst2M, "dmsk_filtered2x_1", true);
+                    }
 
                     // expandDirMap2X
                     run_kernel("expandDirMap2X",
                                {d->d_msk2, d->d_dst2M, d->d_tmp2});
-                    dump_buffer(d->d_tmp2, "dmsk_expanded2x", true);
+                    if (plane == 0) {
+                        dump_buffer(d->d_tmp2, "dmsk_expanded2x", true);
+                    }
 
                     // fillGaps2X & fillGaps2XStep2 (3 passes)
                     run_kernel("fillGaps2X",
                                {d->d_msk2, d->d_tmp2, d->d_tmp2_3});
                     run_kernel("fillGaps2XStep2",
                                {d->d_msk2, d->d_tmp2, d->d_tmp2_3, d->d_dst2M});
-                    dump_buffer(d->d_dst2M, "dmsk_gaps_filled1", true);
+                    if (plane == 0) {
+                        dump_buffer(d->d_dst2M, "dmsk_gaps_filled1", true);
+                    }
 
                     run_kernel("fillGaps2X",
                                {d->d_msk2, d->d_dst2M, d->d_tmp2_3});
                     run_kernel("fillGaps2XStep2",
                                {d->d_msk2, d->d_dst2M, d->d_tmp2_3, d->d_tmp2});
-                    dump_buffer(d->d_tmp2, "dmsk_gaps_filled2", true);
+                    if (plane == 0) {
+                        dump_buffer(d->d_tmp2, "dmsk_gaps_filled2", true);
+                    }
 
                     if (d->map == 3) {
                         final_buffer = d->d_tmp2;
@@ -384,20 +405,26 @@ static const VSFrameRef* VS_CC eedi2GetFrame(int n, int activationReason,
                         run_kernel(
                             "interpolateLattice",
                             {d->d_tmp2_2, d->d_tmp2, d->d_dst2, d->d_tmp2_3});
-                        dump_buffer(d->d_dst2, "output_interp", true);
-                        dump_buffer(d->d_tmp2, "dmsk_interp", true);
+                        if (plane == 0) {
+                            dump_buffer(d->d_dst2, "output_interp", true);
+                            dump_buffer(d->d_tmp2, "dmsk_interp", true);
+                        }
 
                         if (d->pp == 1) {
                             run_kernel("filterDirMap2X",
                                        {d->d_msk2, d->d_tmp2_3, d->d_dst2M});
                             run_kernel("expandDirMap2X",
                                        {d->d_msk2, d->d_dst2M, d->d_tmp2});
-                            dump_buffer(d->d_tmp2, "dmsk_filtered", true);
+                            if (plane == 0) {
+                                dump_buffer(d->d_tmp2, "dmsk_filtered", true);
+                            }
                             // postProcess: d, nmsk, omsk, dst
                             // CUDA: d, tmp2, tmp2_3, dst2
                             run_kernel("postProcess",
                                        {d->d_tmp2, d->d_tmp2_3, d->d_dst2});
-                            dump_buffer(d->d_dst2, "output_pp", true);
+                            if (plane == 0) {
+                                dump_buffer(d->d_dst2, "output_pp", true);
+                            }
                         }
 
                         final_buffer = d->d_dst2;
