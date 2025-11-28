@@ -925,7 +925,7 @@ static void VS_CC eedi2Create(const VSMap* in, VSMap* out, void* /*unused*/,
 VS_EXTERNAL_API(void)
 VapourSynthPluginInit(VSConfigPlugin configFunc,
                       VSRegisterFunction registerFunc, VSPlugin* plugin) {
-    configFunc("com.Sunflower-dolls.eedi2metal", "eedi2metal",
+    configFunc("com.Sunflower-Dolls.eedi2metal", "eedi2metal",
                "EEDI2 filter using Metal", VAPOURSYNTH_API_VERSION, 1, plugin);
 
     const char* eedi2_args =
