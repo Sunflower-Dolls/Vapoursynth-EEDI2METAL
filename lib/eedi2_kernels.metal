@@ -256,20 +256,40 @@ kernel void KERNEL_NAME(calcDirections)(constant EEDI2Param &d [[buffer(0)]],
     ((device const TYPE *)((device const char *)p + (pos_y + (y_off)) * pitch))
 
     int load_x = pos_x - off_w;
-    s2p[t_idx] = GET_LINE_INT(src, -2)[clamp(load_x, 0, width - 1)];
-    s1p[t_idx] = GET_LINE_INT(src, -1)[clamp(load_x, 0, width - 1)];
-    s[t_idx] = GET_LINE_INT(src, 0)[clamp(load_x, 0, width - 1)];
-    s1n[t_idx] = GET_LINE_INT(src, 1)[clamp(load_x, 0, width - 1)];
-    s2n[t_idx] = GET_LINE_INT(src, 2)[clamp(load_x, 0, width - 1)];
+
+    // Sentinel value for out-of-bounds source pixels to avoid false matches
+    constexpr int sentinel = 1000000;
+
+    if (load_x >= 0 && load_x < width) {
+        s2p[t_idx] = GET_LINE_INT(src, -2)[load_x];
+        s1p[t_idx] = GET_LINE_INT(src, -1)[load_x];
+        s[t_idx] = GET_LINE_INT(src, 0)[load_x];
+        s1n[t_idx] = GET_LINE_INT(src, 1)[load_x];
+        s2n[t_idx] = GET_LINE_INT(src, 2)[load_x];
+    } else {
+        s2p[t_idx] = sentinel;
+        s1p[t_idx] = sentinel;
+        s[t_idx] = sentinel;
+        s1n[t_idx] = sentinel;
+        s2n[t_idx] = sentinel;
+    }
     m1p[t_idx] = GET_LINE_INT(msk, -1)[clamp(load_x, 0, width - 1)];
     m1n[t_idx] = GET_LINE_INT(msk, 1)[clamp(load_x, 0, width - 1)];
 
     load_x = pos_x + off_w;
-    s2p[t_idx + block_w] = GET_LINE_INT(src, -2)[clamp(load_x, 0, width - 1)];
-    s1p[t_idx + block_w] = GET_LINE_INT(src, -1)[clamp(load_x, 0, width - 1)];
-    s[t_idx + block_w] = GET_LINE_INT(src, 0)[clamp(load_x, 0, width - 1)];
-    s1n[t_idx + block_w] = GET_LINE_INT(src, 1)[clamp(load_x, 0, width - 1)];
-    s2n[t_idx + block_w] = GET_LINE_INT(src, 2)[clamp(load_x, 0, width - 1)];
+    if (load_x >= 0 && load_x < width) {
+        s2p[t_idx + block_w] = GET_LINE_INT(src, -2)[load_x];
+        s1p[t_idx + block_w] = GET_LINE_INT(src, -1)[load_x];
+        s[t_idx + block_w] = GET_LINE_INT(src, 0)[load_x];
+        s1n[t_idx + block_w] = GET_LINE_INT(src, 1)[load_x];
+        s2n[t_idx + block_w] = GET_LINE_INT(src, 2)[load_x];
+    } else {
+        s2p[t_idx + block_w] = sentinel;
+        s1p[t_idx + block_w] = sentinel;
+        s[t_idx + block_w] = sentinel;
+        s1n[t_idx + block_w] = sentinel;
+        s2n[t_idx + block_w] = sentinel;
+    }
     m1p[t_idx + block_w] = GET_LINE_INT(msk, -1)[clamp(load_x, 0, width - 1)];
     m1n[t_idx + block_w] = GET_LINE_INT(msk, 1)[clamp(load_x, 0, width - 1)];
 
