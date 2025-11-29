@@ -1014,19 +1014,24 @@ kernel void KERNEL_NAME(fillGaps2XStep2)(
         back + round_div((forward - back) * (int(pos.x) - 1 - u), (v - u));
 }
 
-// In the CPU implementation, `dmskp` has serial data dependencies.
-// Here, we adopt the approach used in the EEDI2CUDA.
+// EEDI2CUDA ignores serial dependencies in `dmskp`
+// Here we take a different approach to achieve bit-exact results as CPU
+// implementation.
 kernel void KERNEL_NAME(interpolateLattice)(
     constant EEDI2Param &d [[buffer(0)]], const device TYPE *omsk [[buffer(1)]],
     const device TYPE *dmsk [[buffer(2)]], device TYPE *dst [[buffer(3)]],
-    device TYPE *dmsk_2 [[buffer(4)]], uint2 pos [[thread_position_in_grid]]) {
+    device TYPE *dmsk_2 [[buffer(4)]], device TYPE *scratch_dir [[buffer(5)]],
+    device TYPE *scratch_val [[buffer(6)]],
+    uint3 gid [[threadgroup_position_in_grid]],
+    uint3 tid [[thread_position_in_threadgroup]],
+    uint3 threads_per_group [[threads_per_threadgroup]]) {
+
     const uint width = d.width;
     const uint height = d.height;
-    uint y = d.field ? 2 * pos.y + 1 : 2 * pos.y;
+    uint y = (2 - d.field) + 2 * gid.y;
 
-    if (pos.x >= width || pos.y >= height) {
+    if (y >= height * 2 - 1)
         return;
-    }
 
     const uint pitch = d.d_pitch;
     const TYPE peak = numeric_limits<TYPE>::max();
@@ -1050,158 +1055,195 @@ kernel void KERNEL_NAME(interpolateLattice)(
     device TYPE *dstpnn =
         (device TYPE *)((device char *)dst +
                         (y < height * 2 - 1 ? (y + 1) : y) * pitch);
+
     device TYPE *out_line = dstpn;
     device TYPE *mout_line = (device TYPE *)((device char *)dmsk_2 + y * pitch);
+    device TYPE *s_dir =
+        (device TYPE *)((device char *)scratch_dir + y * pitch);
+    device TYPE *s_val =
+        (device TYPE *)((device char *)scratch_val + y * pitch);
 
-    if (pos.x >= width || y < 1 || y >= height * 2 - 1)
-        return;
-
-    if (pos.x == 0 || pos.x == width - 1) {
-        out_line[pos.x] = (dstp[pos.x] + dstpnn[pos.x] + 1) / 2;
-        mout_line[pos.x] = neutral;
-        return;
-    }
-
-    int dir = dmskp[pos.x];
-    const int lim = limlut[abs(dir - int(neutral)) >> shift2] << shift;
-
-    if (dir == peak || (abs(dmskp[pos.x] - dmskp[pos.x - 1]) > lim &&
-                        abs(dmskp[pos.x] - dmskp[pos.x + 1]) > lim)) {
-        out_line[pos.x] = (dstp[pos.x] + dstpnn[pos.x] + 1) / 2;
-        if (dir != peak)
-            mout_line[pos.x] = neutral;
-        return;
-    }
-
-    if (lim < nine) {
-        const uint sum =
-            (uint(dstp[pos.x - 1]) + dstp[pos.x] + dstp[pos.x + 1] +
-             dstpnn[pos.x - 1] + dstpnn[pos.x] + dstpnn[pos.x + 1]) >>
-            shift;
-        const uint sumsq =
-            (uint(dstp[pos.x - 1] >> shift) * (dstp[pos.x - 1] >> shift)) +
-            (uint(dstp[pos.x] >> shift) * (dstp[pos.x] >> shift)) +
-            (uint(dstp[pos.x + 1] >> shift) * (dstp[pos.x + 1] >> shift)) +
-            (uint(dstpnn[pos.x - 1] >> shift) * (dstpnn[pos.x - 1] >> shift)) +
-            (uint(dstpnn[pos.x] >> shift) * (dstpnn[pos.x] >> shift)) +
-            (uint(dstpnn[pos.x + 1] >> shift) * (dstpnn[pos.x + 1] >> shift));
-        if (6 * sumsq - sum * sum < 576) {
-            out_line[pos.x] = (dstp[pos.x] + dstpnn[pos.x] + 1) / 2;
-            mout_line[pos.x] = peak;
-            return;
+    // Parallel Speculation
+    for (uint x = tid.x; x < width; x += threads_per_group.x) {
+        if (x == 0 || x == width - 1) {
+            s_val[x] = (dstp[x] + dstpnn[x] + 1) / 2;
+            s_dir[x] = neutral;
+            continue;
         }
-    }
 
-    if (pos.x > 1 && pos.x < width - 2 &&
-        ((dstp[pos.x] < mmax(dstp[pos.x - 2], dstp[pos.x - 1]) - three &&
-          dstp[pos.x] < mmax(dstp[pos.x + 2], dstp[pos.x + 1]) - three &&
-          dstpnn[pos.x] < mmax(dstpnn[pos.x - 2], dstpnn[pos.x - 1]) - three &&
-          dstpnn[pos.x] < mmax(dstpnn[pos.x + 2], dstpnn[pos.x + 1]) - three) ||
-         (dstp[pos.x] > mmin(dstp[pos.x - 2], dstp[pos.x - 1]) + three &&
-          dstp[pos.x] > mmin(dstp[pos.x + 2], dstp[pos.x + 1]) + three &&
-          dstpnn[pos.x] > mmin(dstpnn[pos.x - 2], dstpnn[pos.x - 1]) + three &&
-          dstpnn[pos.x] >
-              mmin(dstpnn[pos.x + 2], dstpnn[pos.x + 1]) + three))) {
-        out_line[pos.x] = (dstp[pos.x] + dstpnn[pos.x] + 1) / 2;
-        mout_line[pos.x] = neutral;
-        return;
-    }
+        int dir = dmskp[x];
+        const int lim = limlut[abs(dir - int(neutral)) >> shift2] << shift;
 
-    dir = (dir - int(neutral) + (1 << (shift2 - 1))) >> shift2;
-    const int uStart =
-        (dir - 2 < 0)
-            ? mmax(-int(pos.x) + 1, dir - 2, -int(width) + 2 + int(pos.x))
-            : mmin(int(pos.x) - 1, dir - 2, int(width) - 2 - int(pos.x));
-    const int uStop =
-        (dir + 2 < 0)
-            ? mmax(-int(pos.x) + 1, dir + 2, -int(width) + 2 + int(pos.x))
-            : mmin(int(pos.x) - 1, dir + 2, int(width) - 2 - int(pos.x));
-    uint min = d.nt8;
-    uint val = (dstp[pos.x] + dstpnn[pos.x] + 1) / 2;
-
-    for (int u = uStart; u <= uStop; u++) {
-        const uint diff = abs(dstp[pos.x - 1] - dstpnn[pos.x - u - 1]) +
-                          abs(dstp[pos.x] - dstpnn[pos.x - u]) +
-                          abs(dstp[pos.x + 1] - dstpnn[pos.x - u + 1]) +
-                          abs(dstpnn[pos.x - 1] - dstp[pos.x + u - 1]) +
-                          abs(dstpnn[pos.x] - dstp[pos.x + u]) +
-                          abs(dstpnn[pos.x + 1] - dstp[pos.x + u + 1]);
-        if (diff < min &&
-            ((omskp[pos.x - 1 + u] != peak &&
-              abs(omskp[pos.x - 1 + u] - dmskp[pos.x]) <= lim) ||
-             (omskp[pos.x + u] != peak &&
-              abs(omskp[pos.x + u] - dmskp[pos.x]) <= lim) ||
-             (omskp[pos.x + 1 + u] != peak &&
-              abs(omskp[pos.x + 1 + u] - dmskp[pos.x]) <= lim)) &&
-            ((omskn[pos.x - 1 - u] != peak &&
-              abs(omskn[pos.x - 1 - u] - dmskp[pos.x]) <= lim) ||
-             (omskn[pos.x - u] != peak &&
-              abs(omskn[pos.x - u] - dmskp[pos.x]) <= lim) ||
-             (omskn[pos.x + 1 - u] != peak &&
-              abs(omskn[pos.x + 1 - u] - dmskp[pos.x]) <= lim))) {
-            const uint diff2 =
-                abs(dstp[pos.x + u / 2 - 1] - dstpnn[pos.x - u / 2 - 1]) +
-                abs(dstp[pos.x + u / 2] - dstpnn[pos.x - u / 2]) +
-                abs(dstp[pos.x + u / 2 + 1] - dstpnn[pos.x - u / 2 + 1]);
-            if (diff2 < d.nt4 &&
-                (((abs(omskp[pos.x + u / 2] - omskn[pos.x - u / 2]) <= lim ||
-                   abs(omskp[pos.x + u / 2] - omskn[pos.x - ((u + 1) / 2)]) <=
-                       lim) &&
-                  omskp[pos.x + u / 2] != peak) ||
-                 ((abs(omskp[pos.x + ((u + 1) / 2)] - omskn[pos.x - u / 2]) <=
-                       lim ||
-                   abs(omskp[pos.x + ((u + 1) / 2)] -
-                       omskn[pos.x - ((u + 1) / 2)]) <= lim) &&
-                  omskp[pos.x + ((u + 1) / 2)] != peak))) {
-                if ((abs(dmskp[pos.x] - omskp[pos.x + u / 2]) <= lim ||
-                     abs(dmskp[pos.x] - omskp[pos.x + ((u + 1) / 2)]) <= lim) &&
-                    (abs(dmskp[pos.x] - omskn[pos.x - u / 2]) <= lim ||
-                     abs(dmskp[pos.x] - omskn[pos.x - ((u + 1) / 2)]) <= lim)) {
-                    val = (dstp[pos.x + u / 2] + dstp[pos.x + ((u + 1) / 2)] +
-                           dstpnn[pos.x - u / 2] +
-                           dstpnn[pos.x - ((u + 1) / 2)] + 2) /
-                          4;
-                    min = diff;
-                    dir = u;
-                }
+        // Dependency check is skipped here, handled in serial phase.
+        // We calculate the result assuming dependency check passes.
+        if (lim < nine) {
+            const uint sum = (uint(dstp[x - 1]) + dstp[x] + dstp[x + 1] +
+                              dstpnn[x - 1] + dstpnn[x] + dstpnn[x + 1]) >>
+                             shift;
+            const uint sumsq =
+                (uint(dstp[x - 1] >> shift) * (dstp[x - 1] >> shift)) +
+                (uint(dstp[x] >> shift) * (dstp[x] >> shift)) +
+                (uint(dstp[x + 1] >> shift) * (dstp[x + 1] >> shift)) +
+                (uint(dstpnn[x - 1] >> shift) * (dstpnn[x - 1] >> shift)) +
+                (uint(dstpnn[x] >> shift) * (dstpnn[x] >> shift)) +
+                (uint(dstpnn[x + 1] >> shift) * (dstpnn[x + 1] >> shift));
+            if (6 * sumsq - sum * sum < 576) {
+                s_val[x] = (dstp[x] + dstpnn[x] + 1) / 2;
+                s_dir[x] = peak;
+                continue;
             }
         }
-    }
 
-    if (min != d.nt8) {
-        out_line[pos.x] = val;
-        mout_line[pos.x] = neutral + (dir << shift2);
-    } else {
-        const int dt = 4 >> d.subSampling;
-        const int uStart2 = mmax(-int(pos.x) + 1, -dt);
-        const int uStop2 = mmin(int(width) - 2 - int(pos.x), dt);
-        const uint minm = mmin(dstp[pos.x], dstpnn[pos.x]);
-        const uint maxm = mmax(dstp[pos.x], dstpnn[pos.x]);
-        min = d.nt7;
+        if (x > 1 && x < width - 2 &&
+            ((dstp[x] < mmax(dstp[x - 2], dstp[x - 1]) - three &&
+              dstp[x] < mmax(dstp[x + 2], dstp[x + 1]) - three &&
+              dstpnn[x] < mmax(dstpnn[x - 2], dstpnn[x - 1]) - three &&
+              dstpnn[x] < mmax(dstpnn[x + 2], dstpnn[x + 1]) - three) ||
+             (dstp[x] > mmin(dstp[x - 2], dstp[x - 1]) + three &&
+              dstp[x] > mmin(dstp[x + 2], dstp[x + 1]) + three &&
+              dstpnn[x] > mmin(dstpnn[x - 2], dstpnn[x - 1]) + three &&
+              dstpnn[x] > mmin(dstpnn[x + 2], dstpnn[x + 1]) + three))) {
+            s_val[x] = (dstp[x] + dstpnn[x] + 1) / 2;
+            s_dir[x] = neutral;
+            continue;
+        }
 
-        for (int u = uStart2; u <= uStop2; u++) {
-            const int p1 = dstp[pos.x + u / 2] + dstp[pos.x + ((u + 1) / 2)];
-            const int p2 =
-                dstpnn[pos.x - u / 2] + dstpnn[pos.x - ((u + 1) / 2)];
-            const uint diff = abs(dstp[pos.x - 1] - dstpnn[pos.x - u - 1]) +
-                              abs(dstp[pos.x] - dstpnn[pos.x - u]) +
-                              abs(dstp[pos.x + 1] - dstpnn[pos.x - u + 1]) +
-                              abs(dstpnn[pos.x - 1] - dstp[pos.x + u - 1]) +
-                              abs(dstpnn[pos.x] - dstp[pos.x + u]) +
-                              abs(dstpnn[pos.x + 1] - dstp[pos.x + u + 1]) +
-                              abs(p1 - p2);
-            if (diff < min) {
-                const uint valt = (p1 + p2 + 2) / 4;
-                if (valt >= minm && valt <= maxm) {
-                    val = valt;
-                    min = diff;
-                    dir = u;
+        int dir_shifted = (dir - int(neutral) + (1 << (shift2 - 1))) >> shift2;
+        const int uStart =
+            (dir_shifted - 2 < 0)
+                ? mmax(-int(x) + 1, dir_shifted - 2, -int(width) + 2 + int(x))
+                : mmin(int(x) - 1, dir_shifted - 2, int(width) - 2 - int(x));
+        const int uStop =
+            (dir_shifted + 2 < 0)
+                ? mmax(-int(x) + 1, dir_shifted + 2, -int(width) + 2 + int(x))
+                : mmin(int(x) - 1, dir_shifted + 2, int(width) - 2 - int(x));
+        uint min = d.nt8;
+        uint val = (dstp[x] + dstpnn[x] + 1) / 2;
+        int best_u =
+            dir_shifted; // Default if not found? No, default is neutral.
+
+        for (int u = uStart; u <= uStop; u++) {
+            const uint diff = abs(dstp[x - 1] - dstpnn[x - u - 1]) +
+                              abs(dstp[x] - dstpnn[x - u]) +
+                              abs(dstp[x + 1] - dstpnn[x - u + 1]) +
+                              abs(dstpnn[x - 1] - dstp[x + u - 1]) +
+                              abs(dstpnn[x] - dstp[x + u]) +
+                              abs(dstpnn[x + 1] - dstp[x + u + 1]);
+            if (diff < min &&
+                ((omskp[x - 1 + u] != peak &&
+                  abs(omskp[x - 1 + u] - dmskp[x]) <= lim) ||
+                 (omskp[x + u] != peak &&
+                  abs(omskp[x + u] - dmskp[x]) <= lim) ||
+                 (omskp[x + 1 + u] != peak &&
+                  abs(omskp[x + 1 + u] - dmskp[x]) <= lim)) &&
+                ((omskn[x - 1 - u] != peak &&
+                  abs(omskn[x - 1 - u] - dmskp[x]) <= lim) ||
+                 (omskn[x - u] != peak &&
+                  abs(omskn[x - u] - dmskp[x]) <= lim) ||
+                 (omskn[x + 1 - u] != peak &&
+                  abs(omskn[x + 1 - u] - dmskp[x]) <= lim))) {
+                const uint diff2 =
+                    abs(dstp[x + u / 2 - 1] - dstpnn[x - u / 2 - 1]) +
+                    abs(dstp[x + u / 2] - dstpnn[x - u / 2]) +
+                    abs(dstp[x + u / 2 + 1] - dstpnn[x - u / 2 + 1]);
+                if (diff2 < d.nt4 &&
+                    (((abs(omskp[x + u / 2] - omskn[x - u / 2]) <= lim ||
+                       abs(omskp[x + u / 2] - omskn[x - ((u + 1) / 2)]) <=
+                           lim) &&
+                      omskp[x + u / 2] != peak) ||
+                     ((abs(omskp[x + ((u + 1) / 2)] - omskn[x - u / 2]) <=
+                           lim ||
+                       abs(omskp[x + ((u + 1) / 2)] -
+                           omskn[x - ((u + 1) / 2)]) <= lim) &&
+                      omskp[x + ((u + 1) / 2)] != peak))) {
+                    if ((abs(dmskp[x] - omskp[x + u / 2]) <= lim ||
+                         abs(dmskp[x] - omskp[x + ((u + 1) / 2)]) <= lim) &&
+                        (abs(dmskp[x] - omskn[x - u / 2]) <= lim ||
+                         abs(dmskp[x] - omskn[x - ((u + 1) / 2)]) <= lim)) {
+                        val = (dstp[x + u / 2] + dstp[x + ((u + 1) / 2)] +
+                               dstpnn[x - u / 2] + dstpnn[x - ((u + 1) / 2)] +
+                               2) /
+                              4;
+                        min = diff;
+                        best_u = u;
+                    }
                 }
             }
         }
 
-        out_line[pos.x] = val;
-        mout_line[pos.x] = (min == d.nt7) ? neutral : neutral + (dir << shift2);
+        if (min != d.nt8) {
+            s_val[x] = val;
+            s_dir[x] = neutral + (best_u << shift2);
+        } else {
+            const int dt = 4 >> d.subSampling;
+            const int uStart2 = mmax(-int(x) + 1, -dt);
+            const int uStop2 = mmin(int(width) - 2 - int(x), dt);
+            const uint minm = mmin(dstp[x], dstpnn[x]);
+            const uint maxm = mmax(dstp[x], dstpnn[x]);
+            min = d.nt7;
+
+            for (int u = uStart2; u <= uStop2; u++) {
+                const int p1 = dstp[x + u / 2] + dstp[x + ((u + 1) / 2)];
+                const int p2 = dstpnn[x - u / 2] + dstpnn[x - ((u + 1) / 2)];
+                const uint diff = abs(dstp[x - 1] - dstpnn[x - u - 1]) +
+                                  abs(dstp[x] - dstpnn[x - u]) +
+                                  abs(dstp[x + 1] - dstpnn[x - u + 1]) +
+                                  abs(dstpnn[x - 1] - dstp[x + u - 1]) +
+                                  abs(dstpnn[x] - dstp[x + u]) +
+                                  abs(dstpnn[x + 1] - dstp[x + u + 1]) +
+                                  abs(p1 - p2);
+                if (diff < min) {
+                    const uint valt = (p1 + p2 + 2) / 4;
+                    if (valt >= minm && valt <= maxm) {
+                        val = valt;
+                        min = diff;
+                        best_u = u;
+                    }
+                }
+            }
+
+            s_val[x] = val;
+            s_dir[x] = (min == d.nt7) ? neutral : neutral + (best_u << shift2);
+        }
+    }
+
+    threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
+
+    // Serial Resolution
+    if (tid.x == 0) {
+        // Handle x=0
+        out_line[0] = s_val[0];
+        mout_line[0] = s_dir[0];
+
+        int prev_dir = s_dir[0]; // Should be neutral
+
+        for (uint x = 1; x < width - 1; x++) {
+            int dir = dmskp[x];
+            const int lim = limlut[abs(dir - int(neutral)) >> shift2] << shift;
+
+            // prev_dir is dmskp[x-1] (modified)
+            // dmskp[x+1] is from input
+            if (dir == peak || (abs(dir - prev_dir) > lim &&
+                                abs(dir - int(dmskp[x + 1])) > lim)) {
+                out_line[x] = (dstp[x] + dstpnn[x] + 1) / 2;
+                if (dir != peak)
+                    mout_line[x] = neutral;
+                else
+                    mout_line[x] = peak;
+
+                prev_dir = mout_line[x];
+            } else {
+                // Accept speculated result
+                out_line[x] = s_val[x];
+                mout_line[x] = s_dir[x];
+                prev_dir = s_dir[x];
+            }
+        }
+
+        if (width > 1) {
+            out_line[width - 1] = s_val[width - 1];
+            mout_line[width - 1] = s_dir[width - 1];
+        }
     }
 }
 

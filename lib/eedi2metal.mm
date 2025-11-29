@@ -78,6 +78,8 @@ struct Metal_Resource {
     id<MTLBuffer> d_tmp2_2 = nil;
     id<MTLBuffer> d_tmp2_3 = nil;
     id<MTLBuffer> d_dst2M = nil;
+    id<MTLBuffer> d_scratch_dir = nil;
+    id<MTLBuffer> d_scratch_val = nil;
     id<MTLBuffer> params_buffer = nil;
 
     id<MTLCommandQueue> commandQueue = nil;
@@ -94,6 +96,8 @@ struct Metal_Resource {
         d_tmp2_2 = nil;
         d_tmp2_3 = nil;
         d_dst2M = nil;
+        d_scratch_dir = nil;
+        d_scratch_val = nil;
         params_buffer = nil;
         commandQueue = nil;
         copy_pso = nil;
@@ -108,6 +112,8 @@ struct Metal_Resource {
           d_tmp2(std::move(other.d_tmp2)), d_tmp2_2(std::move(other.d_tmp2_2)),
           d_tmp2_3(std::move(other.d_tmp2_3)),
           d_dst2M(std::move(other.d_dst2M)),
+          d_scratch_dir(std::move(other.d_scratch_dir)),
+          d_scratch_val(std::move(other.d_scratch_val)),
           params_buffer(std::move(other.params_buffer)),
           commandQueue(std::move(other.commandQueue)),
           copy_pso(std::move(other.copy_pso)) {
@@ -121,6 +127,8 @@ struct Metal_Resource {
         other.d_tmp2_2 = nil;
         other.d_tmp2_3 = nil;
         other.d_dst2M = nil;
+        other.d_scratch_dir = nil;
+        other.d_scratch_val = nil;
         other.params_buffer = nil;
         other.commandQueue = nil;
         other.copy_pso = nil;
@@ -138,6 +146,8 @@ struct Metal_Resource {
             d_tmp2_2 = std::move(other.d_tmp2_2);
             d_tmp2_3 = std::move(other.d_tmp2_3);
             d_dst2M = std::move(other.d_dst2M);
+            d_scratch_dir = std::move(other.d_scratch_dir);
+            d_scratch_val = std::move(other.d_scratch_val);
             params_buffer = std::move(other.params_buffer);
             commandQueue = std::move(other.commandQueue);
             copy_pso = std::move(other.copy_pso);
@@ -152,6 +162,8 @@ struct Metal_Resource {
             other.d_tmp2_2 = nil;
             other.d_tmp2_3 = nil;
             other.d_dst2M = nil;
+            other.d_scratch_dir = nil;
+            other.d_scratch_val = nil;
             other.params_buffer = nil;
             other.commandQueue = nil;
             other.copy_pso = nil;
@@ -584,9 +596,39 @@ static const VSFrameRef* VS_CC eedi2GetFrame(int n, int activationReason,
                         [blit endEncoding];
                         encoder = [cmd_buf computeCommandEncoder];
 
-                        run_kernel("interpolateLattice",
-                                   {resource.d_tmp2_2, resource.d_tmp2,
-                                    resource.d_dst2, resource.d_tmp2_3});
+                        {
+                            id<MTLComputePipelineState> pso =
+                                get_pso(d, "interpolateLattice");
+                            if (pso) {
+                                [encoder setComputePipelineState:pso];
+                                [encoder setBuffer:resource.params_buffer
+                                            offset:0
+                                           atIndex:0];
+                                [encoder setBuffer:resource.d_tmp2_2
+                                            offset:0
+                                           atIndex:1];
+                                [encoder setBuffer:resource.d_tmp2
+                                            offset:0
+                                           atIndex:2];
+                                [encoder setBuffer:resource.d_dst2
+                                            offset:0
+                                           atIndex:3];
+                                [encoder setBuffer:resource.d_tmp2_3
+                                            offset:0
+                                           atIndex:4];
+                                [encoder setBuffer:resource.d_scratch_dir
+                                            offset:0
+                                           atIndex:5];
+                                [encoder setBuffer:resource.d_scratch_val
+                                            offset:0
+                                           atIndex:6];
+
+                                MTLSize tgSize = MTLSizeMake(256, 1, 1);
+                                MTLSize tgCount = MTLSizeMake(1, height, 1);
+                                [encoder dispatchThreadgroups:tgCount
+                                        threadsPerThreadgroup:tgSize];
+                            }
+                        }
                         if (plane == 0) {
                             dump_buffer(resource.d_dst2, "output_interp", true);
                             dump_buffer(resource.d_tmp2, "dmsk_interp", true);
@@ -891,6 +933,12 @@ static void VS_CC eedi2Create(const VSMap* in, VSMap* out, void* /*unused*/,
                                                       options:options];
                 res.d_dst2M = [d->device newBufferWithLength:d->plane_size_2x
                                                      options:options];
+                res.d_scratch_dir =
+                    [d->device newBufferWithLength:d->plane_size_2x
+                                           options:options];
+                res.d_scratch_val =
+                    [d->device newBufferWithLength:d->plane_size_2x
+                                           options:options];
             }
 
             res.params_buffer =
