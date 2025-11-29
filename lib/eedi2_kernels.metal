@@ -247,8 +247,6 @@ kernel void KERNEL_NAME(calcDirections)(constant EEDI2Param &d [[buffer(0)]],
     threadgroup int s2p[128], s1p[128], s[128], s1n[128], s2n[128];
     threadgroup int m1p[128], m1n[128];
 
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-
     constexpr int block_w = 64;
     constexpr int off_w = block_w / 2;
 
@@ -1107,7 +1105,7 @@ kernel void KERNEL_NAME(interpolateLattice)(
         uint min = d.nt8;
         uint val = (dstp[x] + dstpnn[x] + 1) / 2;
         int best_u =
-            dir_shifted; // Default if not found? No, default is neutral.
+            dir_shifted;
 
         for (int u = uStart; u <= uStop; u++) {
             const uint diff = abs(dstp[x - 1] - dstpnn[x - u - 1]) +

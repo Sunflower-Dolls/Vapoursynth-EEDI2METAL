@@ -905,7 +905,7 @@ static void VS_CC eedi2Create(const VSMap* in, VSMap* out, void* /*unused*/,
                                    std::memory_order::relaxed);
         d->resources.reserve(num_resources);
 
-        MTLResourceOptions options = MTLResourceStorageModeManaged;
+        MTLResourceOptions options = MTLResourceStorageModeShared;
 
         for (int i = 0; i < num_resources; ++i) {
             Metal_Resource res;
