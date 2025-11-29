@@ -6,6 +6,7 @@ cuda-impl/
 */build/*
 */.cache/*
 build/*
+builddir/*
 .vscode/*
 .cache/*
 *.bin

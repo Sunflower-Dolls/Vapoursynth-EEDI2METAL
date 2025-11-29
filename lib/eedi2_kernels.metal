@@ -258,7 +258,7 @@ kernel void KERNEL_NAME(calcDirections)(constant EEDI2Param &d [[buffer(0)]],
     int load_x = pos_x - off_w;
 
     // Sentinel value for out-of-bounds source pixels to avoid false matches
-    constexpr int sentinel = 1000000;
+    constexpr int sentinel = 10000000;
 
     if (load_x >= 0 && load_x < width) {
         s2p[t_idx] = GET_LINE_INT(src, -2)[load_x];
