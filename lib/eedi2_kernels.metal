@@ -886,9 +886,9 @@ kernel void KERNEL_NAME(fillGaps2X)(constant EEDI2Param &d [[buffer(0)]],
     const TYPE neutral = peak / 2 + 1;
     const uint shift = d.shift;
     const uint shift2 = shift + 2;
-    const TYPE fiveHundred = 500 << shift;
-    const TYPE twenty = 20 << shift;
-    const TYPE eight = 8 << shift;
+    const int fiveHundred = 500 << shift;
+    const int twenty = 20 << shift;
+    const int eight = 8 << shift;
 
     device int *tmp_line = (device int *)((device char *)tmp + y * pitch);
     tmp_line[pos.x] = 0;
@@ -924,7 +924,7 @@ kernel void KERNEL_NAME(fillGaps2X)(constant EEDI2Param &d [[buffer(0)]],
     int back = fiveHundred;
     int forward = -fiveHundred;
 
-    while (u > 0 && pos.x - u < 16) {
+    while (u > 0) {
         if (dmskp[u] != peak) {
             back = dmskp[u];
             break;
@@ -934,7 +934,7 @@ kernel void KERNEL_NAME(fillGaps2X)(constant EEDI2Param &d [[buffer(0)]],
         u--;
     }
 
-    while (v < width && v - pos.x < 16) {
+    while (v < width) {
         if (dmskp[v] != peak) {
             forward = dmskp[v];
             break;
@@ -976,7 +976,7 @@ kernel void KERNEL_NAME(fillGaps2X)(constant EEDI2Param &d [[buffer(0)]],
         uint(6));
 
     if (abs(forward - back) <= thresh && (v - u - 1 <= lim || tc || bc)) {
-        tmp_line[pos.x] = (pos.x - u) | ((v - pos.x) << 8);
+        tmp_line[pos.x] = (pos.x - u) | ((v - pos.x) << 16);
     }
 }
 
@@ -1002,31 +1002,12 @@ kernel void KERNEL_NAME(fillGaps2XStep2)(
     if (pos.x < 1 || pos.x >= width - 1 || y < 1 || y >= height * 2 - 1)
         return;
 
-    uint uv = 0;
-    uint pos_found = 0;
-
-    for (uint i = max((int)pos.x - 16, 1); i < pos.x; ++i) {
-        bool cond = i + (tmpp[i] >> 8) > pos.x;
-        uv = cond ? tmpp[i] : uv;
-        pos_found = cond ? i : pos_found;
-    }
-
-    if (tmpp[pos.x]) {
-        uv = tmpp[pos.x];
-        pos_found = pos.x;
-    }
-
-    for (uint i = pos.x + 1; i - pos.x < 16 && i < width - 1; ++i) {
-        bool cond = i - (tmpp[i] & 255u) < pos.x;
-        uv = cond ? tmpp[i] : uv;
-        pos_found = cond ? i : pos_found;
-    }
-
+    uint uv = tmpp[pos.x];
     if (!uv)
         return;
 
-    int u = pos_found - (uv & 255);
-    int v = pos_found + (uv >> 8);
+    int u = pos.x - (uv & 0xFFFF);
+    int v = pos.x + (uv >> 16);
     int back = dmskp[u];
     int forward = dmskp[v];
 

@@ -599,7 +599,7 @@ static const VSFrameRef* VS_CC eedi2GetFrame(int n, int activationReason,
                         {
                             id<MTLComputePipelineState> pso =
                                 get_pso(d, "interpolateLattice");
-                            if (pso) {
+                            if (pso != nullptr) {
                                 [encoder setComputePipelineState:pso];
                                 [encoder setBuffer:resource.params_buffer
                                             offset:0
