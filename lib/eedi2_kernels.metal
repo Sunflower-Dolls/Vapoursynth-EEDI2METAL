@@ -254,28 +254,46 @@ kernel void KERNEL_NAME(calcDirections)(constant EEDI2Param &d [[buffer(0)]],
     constexpr int sentinel = 10000000;
     const long max_offset = (long)height * pitch;
 
-#define safe_load_linear(buf, pos_y, y_off, x_off, pitch, max_offset, def) \
-    ((((long)((pos_y) + (y_off)) * (pitch) + (long)((x_off) * sizeof(TYPE))) >= 0 && ((long)((pos_y) + (y_off)) * (pitch) + (long)((x_off) * sizeof(TYPE))) < (max_offset)) ? *(device const TYPE *)((device const char *)(buf) + ((long)((pos_y) + (y_off)) * (pitch) + (long)((x_off) * sizeof(TYPE)))) : (def))
+#define safe_load_linear(buf, pos_y, y_off, x_off, pitch, max_offset, def)     \
+    ((((long)((pos_y) + (y_off)) * (pitch) +                                   \
+       (long)((x_off) * sizeof(TYPE))) >= 0 &&                                 \
+      ((long)((pos_y) + (y_off)) * (pitch) + (long)((x_off) * sizeof(TYPE))) < \
+          (max_offset))                                                        \
+         ? *(device const TYPE *)((device const char *)(buf) +                 \
+                                  ((long)((pos_y) + (y_off)) * (pitch) +       \
+                                   (long)((x_off) * sizeof(TYPE))))            \
+         : (def))
 
     int load_x = pos_x - off_w;
     int lx = load_x;
-    s2p[t_idx] = safe_load_linear(src, pos_y, -2, lx, pitch, max_offset, sentinel);
-    s1p[t_idx] = safe_load_linear(src, pos_y, -1, lx, pitch, max_offset, sentinel);
+    s2p[t_idx] =
+        safe_load_linear(src, pos_y, -2, lx, pitch, max_offset, sentinel);
+    s1p[t_idx] =
+        safe_load_linear(src, pos_y, -1, lx, pitch, max_offset, sentinel);
     s[t_idx] = safe_load_linear(src, pos_y, 0, lx, pitch, max_offset, sentinel);
-    s1n[t_idx] = safe_load_linear(src, pos_y, 1, lx, pitch, max_offset, sentinel);
-    s2n[t_idx] = safe_load_linear(src, pos_y, 2, lx, pitch, max_offset, sentinel);
+    s1n[t_idx] =
+        safe_load_linear(src, pos_y, 1, lx, pitch, max_offset, sentinel);
+    s2n[t_idx] =
+        safe_load_linear(src, pos_y, 2, lx, pitch, max_offset, sentinel);
     m1p[t_idx] = safe_load_linear(msk, pos_y, -1, lx, pitch, max_offset, 0);
     m1n[t_idx] = safe_load_linear(msk, pos_y, 1, lx, pitch, max_offset, 0);
 
     load_x = pos_x + off_w;
     lx = load_x;
-    s2p[t_idx + block_w] = safe_load_linear(src, pos_y, -2, lx, pitch, max_offset, sentinel);
-    s1p[t_idx + block_w] = safe_load_linear(src, pos_y, -1, lx, pitch, max_offset, sentinel);
-    s[t_idx + block_w] = safe_load_linear(src, pos_y, 0, lx, pitch, max_offset, sentinel);
-    s1n[t_idx + block_w] = safe_load_linear(src, pos_y, 1, lx, pitch, max_offset, sentinel);
-    s2n[t_idx + block_w] = safe_load_linear(src, pos_y, 2, lx, pitch, max_offset, sentinel);
-    m1p[t_idx + block_w] = safe_load_linear(msk, pos_y, -1, lx, pitch, max_offset, 0);
-    m1n[t_idx + block_w] = safe_load_linear(msk, pos_y, 1, lx, pitch, max_offset, 0);
+    s2p[t_idx + block_w] =
+        safe_load_linear(src, pos_y, -2, lx, pitch, max_offset, sentinel);
+    s1p[t_idx + block_w] =
+        safe_load_linear(src, pos_y, -1, lx, pitch, max_offset, sentinel);
+    s[t_idx + block_w] =
+        safe_load_linear(src, pos_y, 0, lx, pitch, max_offset, sentinel);
+    s1n[t_idx + block_w] =
+        safe_load_linear(src, pos_y, 1, lx, pitch, max_offset, sentinel);
+    s2n[t_idx + block_w] =
+        safe_load_linear(src, pos_y, 2, lx, pitch, max_offset, sentinel);
+    m1p[t_idx + block_w] =
+        safe_load_linear(msk, pos_y, -1, lx, pitch, max_offset, 0);
+    m1n[t_idx + block_w] =
+        safe_load_linear(msk, pos_y, 1, lx, pitch, max_offset, 0);
 
 #undef safe_load_linear
 
@@ -1104,8 +1122,7 @@ kernel void KERNEL_NAME(interpolateLattice)(
                 : mmin(int(x) - 1, dir_shifted + 2, int(width) - 2 - int(x));
         uint min = d.nt8;
         uint val = (dstp[x] + dstpnn[x] + 1) / 2;
-        int best_u =
-            dir_shifted;
+        int best_u = dir_shifted;
 
         for (int u = uStart; u <= uStop; u++) {
             const uint diff = abs(dstp[x - 1] - dstpnn[x - u - 1]) +
