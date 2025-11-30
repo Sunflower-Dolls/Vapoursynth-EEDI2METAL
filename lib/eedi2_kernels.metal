@@ -1179,7 +1179,7 @@ kernel void KERNEL_NAME(interpolateLattice)(
         } else {
             const int dt = 4 >> d.subSampling;
             const int uStart2 = mmax(-int(x) + 1, -dt);
-            const int uStop2 = mmin(int(width) - 2 - int(x), dt);
+            const int uStop2 = mmin(mmin(int(width) - 2 - int(x), dt), (int)x - 1);
             const uint minm = mmin(dstp[x], dstpnn[x]);
             const uint maxm = mmax(dstp[x], dstpnn[x]);
             min = d.nt7;

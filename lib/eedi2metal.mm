@@ -929,8 +929,10 @@ static void VS_CC eedi2Create(const VSMap* in, VSMap* out, void* /*unused*/,
                                                     options:options];
                 res.d_tmp2_2 = [d->device newBufferWithLength:d->plane_size_2x
                                                       options:options];
-                res.d_tmp2_3 = [d->device newBufferWithLength:d->plane_size_2x
-                                                      options:options];
+                res.d_tmp2_3 = [d->device
+                    newBufferWithLength:d->plane_size_2x * sizeof(int) /
+                                        d->vi->format->bytesPerSample
+                                options:options];
                 res.d_dst2M = [d->device newBufferWithLength:d->plane_size_2x
                                                      options:options];
                 res.d_scratch_dir =
