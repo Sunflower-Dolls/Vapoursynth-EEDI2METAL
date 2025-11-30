@@ -26,6 +26,7 @@ struct EEDI2Param {
     uint estr, dstr, maxd;
     uint subSampling;
     uint shift;
+    uint int_pitch;
 };
 
 constant int limlut[33] = {6,  6,  7,  7,  8,  8,  9,  9,  9,  10, 10,

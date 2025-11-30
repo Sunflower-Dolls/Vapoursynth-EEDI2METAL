@@ -42,6 +42,7 @@ struct EEDI2Param {
     uint estr, dstr, maxd;
     uint subSampling;
     uint shift;
+    uint int_pitch;
 };
 
 using namespace std::string_literals;
@@ -347,6 +348,7 @@ static const VSFrameRef* VS_CC eedi2GetFrame(int n, int activationReason,
             params->width = width;
             params->height = height;
             params->d_pitch = (uint)metal_stride;
+            params->int_pitch = (uint)((width * 4 + 63) & ~63);
             params->subSampling = (plane > 0) ? d->vi->format->subSamplingW : 0;
             params->shift = (d->bits_per_sample == 16) ? 8 : 0;
             if (d->field > 1) {
@@ -598,7 +600,7 @@ static const VSFrameRef* VS_CC eedi2GetFrame(int n, int activationReason,
 
                         {
                             id<MTLComputePipelineState> pso =
-                                get_pso(d, "interpolateLattice");
+                                get_pso(d, "interpolateLattice_parallel");
                             if (pso != nullptr) {
                                 [encoder setComputePipelineState:pso];
                                 [encoder setBuffer:resource.params_buffer
@@ -613,17 +615,48 @@ static const VSFrameRef* VS_CC eedi2GetFrame(int n, int activationReason,
                                 [encoder setBuffer:resource.d_dst2
                                             offset:0
                                            atIndex:3];
-                                [encoder setBuffer:resource.d_tmp2_3
-                                            offset:0
-                                           atIndex:4];
                                 [encoder setBuffer:resource.d_scratch_dir
                                             offset:0
-                                           atIndex:5];
+                                           atIndex:4];
                                 [encoder setBuffer:resource.d_scratch_val
                                             offset:0
-                                           atIndex:6];
+                                           atIndex:5];
 
-                                MTLSize tgSize = MTLSizeMake(256, 1, 1);
+                                MTLSize tgSize = MTLSizeMake(16, 16, 1);
+                                MTLSize tgCount = MTLSizeMake(
+                                    (width + tgSize.width - 1) / tgSize.width,
+                                    (height + tgSize.height - 1) /
+                                        tgSize.height,
+                                    1);
+                                [encoder dispatchThreadgroups:tgCount
+                                        threadsPerThreadgroup:tgSize];
+                            }
+                        }
+                        {
+                            id<MTLComputePipelineState> pso =
+                                get_pso(d, "interpolateLattice_serial");
+                            if (pso != nullptr) {
+                                [encoder setComputePipelineState:pso];
+                                [encoder setBuffer:resource.params_buffer
+                                            offset:0
+                                           atIndex:0];
+                                [encoder setBuffer:resource.d_tmp2
+                                            offset:0
+                                           atIndex:1];
+                                [encoder setBuffer:resource.d_dst2
+                                            offset:0
+                                           atIndex:2];
+                                [encoder setBuffer:resource.d_tmp2_3
+                                            offset:0
+                                           atIndex:3];
+                                [encoder setBuffer:resource.d_scratch_dir
+                                            offset:0
+                                           atIndex:4];
+                                [encoder setBuffer:resource.d_scratch_val
+                                            offset:0
+                                           atIndex:5];
+
+                                MTLSize tgSize = MTLSizeMake(1, 1, 1);
                                 MTLSize tgCount = MTLSizeMake(1, height, 1);
                                 [encoder dispatchThreadgroups:tgCount
                                         threadsPerThreadgroup:tgSize];
@@ -860,16 +893,24 @@ static void VS_CC eedi2Create(const VSMap* in, VSMap* out, void* /*unused*/,
 
         NSMutableDictionary<NSString*, id<MTLComputePipelineState>>* psos =
             [NSMutableDictionary dictionary];
-        std::vector<std::string> kernel_names = {
-            "buildEdgeMask",    "erode",
-            "dilate",           "removeSmallHorzGaps",
-            "calcDirections",   "filterDirMap",
-            "expandDirMap",     "filterMap",
-            "markDirections2X", "filterDirMap2X",
-            "expandDirMap2X",   "fillGaps2X",
-            "fillGaps2XStep2",  "interpolateLattice",
-            "postProcess",      "enlarge2",
-            "copy_buffer"};
+        std::vector<std::string> kernel_names = {"buildEdgeMask",
+                                                 "erode",
+                                                 "dilate",
+                                                 "removeSmallHorzGaps",
+                                                 "calcDirections",
+                                                 "filterDirMap",
+                                                 "expandDirMap",
+                                                 "filterMap",
+                                                 "markDirections2X",
+                                                 "filterDirMap2X",
+                                                 "expandDirMap2X",
+                                                 "fillGaps2X",
+                                                 "fillGaps2XStep2",
+                                                 "interpolateLattice_parallel",
+                                                 "interpolateLattice_serial",
+                                                 "postProcess",
+                                                 "enlarge2",
+                                                 "copy_buffer"};
         std::string suffix = (d->bits_per_sample == 8) ? "_u8" : "_u16";
 
         for (const auto& name : kernel_names) {
@@ -929,9 +970,10 @@ static void VS_CC eedi2Create(const VSMap* in, VSMap* out, void* /*unused*/,
                                                     options:options];
                 res.d_tmp2_2 = [d->device newBufferWithLength:d->plane_size_2x
                                                       options:options];
+                size_t int_pitch = (d->vi->width * 4 + 63) & ~63;
+                size_t int_size = int_pitch * d->vi->height * 2;
                 res.d_tmp2_3 = [d->device
-                    newBufferWithLength:d->plane_size_2x * sizeof(int) /
-                                        d->vi->format->bytesPerSample
+                    newBufferWithLength:std::max(d->plane_size_2x, int_size)
                                 options:options];
                 res.d_dst2M = [d->device newBufferWithLength:d->plane_size_2x
                                                      options:options];
