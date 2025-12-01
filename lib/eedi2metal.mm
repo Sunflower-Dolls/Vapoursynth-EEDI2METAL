@@ -279,6 +279,51 @@ static void VS_CC eedi2Init(VSMap* /*unused*/, VSMap* /*unused*/,
     vsapi->setVideoInfo(&vi, 1, node);
 }
 
+struct MetalCaptureScope {
+    MTLCaptureManager* manager = nil;
+    bool active = false;
+
+    MetalCaptureScope(id<MTLDevice> device, int n) {
+        if (std::getenv("EEDI2_METAL_CAPTURE")) {
+            manager = [MTLCaptureManager sharedCaptureManager];
+            if (manager && !manager.isCapturing) {
+                MTLCaptureDescriptor* desc =
+                    [[MTLCaptureDescriptor alloc] init];
+                desc.captureObject = device;
+                desc.destination = MTLCaptureDestinationGPUTraceDocument;
+
+                std::string filename =
+                    "eedi2_capture_" + std::to_string(n) + ".gputrace";
+                desc.outputURL = [NSURL
+                    fileURLWithPath:[NSString
+                                        stringWithUTF8String:filename.c_str()]];
+
+                NSError* error = nil;
+                if ([manager startCaptureWithDescriptor:desc error:&error]) {
+                    active = true;
+                    std::cout << "Started Metal Capture for frame " << n
+                              << std::endl;
+                } else {
+                    std::cerr << "Failed to start Metal Capture: " <<
+                        [[error localizedDescription] UTF8String] << std::endl;
+                    std::cerr << "Please run with environment variable "
+                              << "METAL_CAPTURE_ENABLED=1" << std::endl;
+                }
+            }
+        }
+    }
+
+    ~MetalCaptureScope() {
+        if (active && manager) {
+            [manager stopCapture];
+            std::cout << "Stopped Metal Capture" << std::endl;
+        }
+    }
+
+    MetalCaptureScope(const MetalCaptureScope&) = delete;
+    MetalCaptureScope& operator=(const MetalCaptureScope&) = delete;
+};
+
 static const VSFrameRef* VS_CC eedi2GetFrame(int n, int activationReason,
                                              void** instanceData,
                                              void** /*unused*/,
@@ -293,6 +338,8 @@ static const VSFrameRef* VS_CC eedi2GetFrame(int n, int activationReason,
     if (activationReason != arAllFramesReady) {
         return nullptr;
     }
+
+    MetalCaptureScope capture_scope(d->device, n);
 
     const VSFrameRef* src_frame = vsapi->getFrameFilter(n, d->node, frameCtx);
 

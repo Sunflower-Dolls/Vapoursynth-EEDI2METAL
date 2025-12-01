@@ -10,3 +10,4 @@ builddir/*
 .vscode/*
 .cache/*
 *.bin
+*.gputrace
