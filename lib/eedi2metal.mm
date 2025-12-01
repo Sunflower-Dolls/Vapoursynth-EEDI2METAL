@@ -21,8 +21,10 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <concepts>
 #include <fstream>
+#include <iostream>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -411,7 +413,6 @@ static const VSFrameRef* VS_CC eedi2GetFrame(int n, int activationReason,
                         ofs.write(ptr + y * metal_stride, row_size);
                     }
                 }
-
                 cmd_buf = [resource.commandQueue commandBuffer];
                 encoder = [cmd_buf computeCommandEncoder];
             };
@@ -421,6 +422,43 @@ static const VSFrameRef* VS_CC eedi2GetFrame(int n, int activationReason,
                                    bool /*is_2x*/) { /* Do nothing */ };
 #endif
 
+#ifdef DEBUG_PROFILING
+            // Helper macro for profiling kernel dispatches
+            auto profile_kernel_dispatch = [&](const std::string& kernel_name,
+                                               auto dispatch_func) {
+                [encoder endEncoding];
+                [cmd_buf commit];
+
+                auto cpu_start = std::chrono::high_resolution_clock::now();
+                [cmd_buf waitUntilCompleted];
+                auto cpu_end = std::chrono::high_resolution_clock::now();
+
+                double cpu_time_ms = std::chrono::duration<double, std::milli>(
+                                         cpu_end - cpu_start)
+                                         .count();
+
+                CFTimeInterval gpu_start = cmd_buf.GPUStartTime;
+                CFTimeInterval gpu_end = cmd_buf.GPUEndTime;
+                double gpu_time_ms = (gpu_end - gpu_start) * 1000.0;
+
+                std::cout << "[PROFILE] Kernel: " << kernel_name
+                          << " | GPU: " << gpu_time_ms << " ms"
+                          << " | CPU wait: " << cpu_time_ms << " ms"
+                          << std::endl;
+
+                cmd_buf = [resource.commandQueue commandBuffer];
+                encoder = [cmd_buf computeCommandEncoder];
+
+                // Execute the actual dispatch
+                dispatch_func();
+            };
+#else
+            auto profile_kernel_dispatch =
+                [&](const std::string& /*kernel_name*/, auto dispatch_func) {
+                    dispatch_func();
+                };
+#endif
+
             auto run_kernel =
                 [&](const std::string& name,
                     const std::vector<id<MTLBuffer>>& kernel_buffers) {
@@ -428,6 +466,37 @@ static const VSFrameRef* VS_CC eedi2GetFrame(int n, int activationReason,
                     if (!pso) {
                         return;
                     }
+
+#ifdef DEBUG_PROFILING
+                    // For profiling, we need to commit the current command buffer
+                    // and measure the actual GPU execution time
+                    [encoder endEncoding];
+                    [cmd_buf commit];
+
+                    auto cpu_start = std::chrono::high_resolution_clock::now();
+                    [cmd_buf waitUntilCompleted];
+                    auto cpu_end = std::chrono::high_resolution_clock::now();
+
+                    double cpu_time_ms =
+                        std::chrono::duration<double, std::milli>(cpu_end -
+                                                                  cpu_start)
+                            .count();
+
+                    // Get GPU times if available
+                    CFTimeInterval gpu_start = cmd_buf.GPUStartTime;
+                    CFTimeInterval gpu_end = cmd_buf.GPUEndTime;
+                    double gpu_time_ms = (gpu_end - gpu_start) * 1000.0;
+
+                    std::cout << "[PROFILE] Kernel: " << name
+                              << " | GPU: " << gpu_time_ms << " ms"
+                              << " | CPU wait: " << cpu_time_ms << " ms"
+                              << std::endl;
+
+                    // Create new command buffer and encoder for next operation
+                    cmd_buf = [resource.commandQueue commandBuffer];
+                    encoder = [cmd_buf computeCommandEncoder];
+#endif
+
                     [encoder setComputePipelineState:pso];
                     [encoder setBuffer:resource.params_buffer
                                 offset:0
@@ -464,15 +533,19 @@ static const VSFrameRef* VS_CC eedi2GetFrame(int n, int activationReason,
                     if (plane == 0) {
                         dump_buffer(resource.d_msk, "msk_before_calc", false);
                     }
-                    [encoder setComputePipelineState:pso_calc];
-                    [encoder setBuffer:resource.params_buffer
-                                offset:0
-                               atIndex:0];
-                    [encoder setBuffer:resource.d_src offset:0 atIndex:1];
-                    [encoder setBuffer:resource.d_msk offset:0 atIndex:2];
-                    [encoder setBuffer:resource.d_tmp offset:0 atIndex:3];
-                    [encoder dispatchThreadgroups:tg_num_calc
-                            threadsPerThreadgroup:tg_size_calc];
+
+                    profile_kernel_dispatch("calcDirections", [&]() {
+                        [encoder setComputePipelineState:pso_calc];
+                        [encoder setBuffer:resource.params_buffer
+                                    offset:0
+                                   atIndex:0];
+                        [encoder setBuffer:resource.d_src offset:0 atIndex:1];
+                        [encoder setBuffer:resource.d_msk offset:0 atIndex:2];
+                        [encoder setBuffer:resource.d_tmp offset:0 atIndex:3];
+                        [encoder dispatchThreadgroups:tg_num_calc
+                                threadsPerThreadgroup:tg_size_calc];
+                    });
+
                     if (plane == 0) {
                         dump_buffer(resource.d_tmp, "dmsk_calc", false);
                     }
@@ -602,64 +675,76 @@ static const VSFrameRef* VS_CC eedi2GetFrame(int n, int activationReason,
                             id<MTLComputePipelineState> pso =
                                 get_pso(d, "interpolateLattice_parallel");
                             if (pso != nullptr) {
-                                [encoder setComputePipelineState:pso];
-                                [encoder setBuffer:resource.params_buffer
-                                            offset:0
-                                           atIndex:0];
-                                [encoder setBuffer:resource.d_tmp2_2
-                                            offset:0
-                                           atIndex:1];
-                                [encoder setBuffer:resource.d_tmp2
-                                            offset:0
-                                           atIndex:2];
-                                [encoder setBuffer:resource.d_dst2
-                                            offset:0
-                                           atIndex:3];
-                                [encoder setBuffer:resource.d_scratch_dir
-                                            offset:0
-                                           atIndex:4];
-                                [encoder setBuffer:resource.d_scratch_val
-                                            offset:0
-                                           atIndex:5];
-
                                 MTLSize tgSize = MTLSizeMake(16, 16, 1);
                                 MTLSize tgCount = MTLSizeMake(
                                     (width + tgSize.width - 1) / tgSize.width,
                                     (height + tgSize.height - 1) /
                                         tgSize.height,
                                     1);
-                                [encoder dispatchThreadgroups:tgCount
-                                        threadsPerThreadgroup:tgSize];
+
+                                profile_kernel_dispatch(
+                                    "interpolateLattice_parallel", [&]() {
+                                        [encoder setComputePipelineState:pso];
+                                        [encoder
+                                            setBuffer:resource.params_buffer
+                                               offset:0
+                                              atIndex:0];
+                                        [encoder setBuffer:resource.d_tmp2_2
+                                                    offset:0
+                                                   atIndex:1];
+                                        [encoder setBuffer:resource.d_tmp2
+                                                    offset:0
+                                                   atIndex:2];
+                                        [encoder setBuffer:resource.d_dst2
+                                                    offset:0
+                                                   atIndex:3];
+                                        [encoder
+                                            setBuffer:resource.d_scratch_dir
+                                               offset:0
+                                              atIndex:4];
+                                        [encoder
+                                            setBuffer:resource.d_scratch_val
+                                               offset:0
+                                              atIndex:5];
+                                        [encoder dispatchThreadgroups:tgCount
+                                                threadsPerThreadgroup:tgSize];
+                                    });
                             }
                         }
                         {
                             id<MTLComputePipelineState> pso =
                                 get_pso(d, "interpolateLattice_serial");
                             if (pso != nullptr) {
-                                [encoder setComputePipelineState:pso];
-                                [encoder setBuffer:resource.params_buffer
-                                            offset:0
-                                           atIndex:0];
-                                [encoder setBuffer:resource.d_tmp2
-                                            offset:0
-                                           atIndex:1];
-                                [encoder setBuffer:resource.d_dst2
-                                            offset:0
-                                           atIndex:2];
-                                [encoder setBuffer:resource.d_tmp2_3
-                                            offset:0
-                                           atIndex:3];
-                                [encoder setBuffer:resource.d_scratch_dir
-                                            offset:0
-                                           atIndex:4];
-                                [encoder setBuffer:resource.d_scratch_val
-                                            offset:0
-                                           atIndex:5];
-
                                 MTLSize tgSize = MTLSizeMake(1, 1, 1);
                                 MTLSize tgCount = MTLSizeMake(1, height, 1);
-                                [encoder dispatchThreadgroups:tgCount
-                                        threadsPerThreadgroup:tgSize];
+
+                                profile_kernel_dispatch(
+                                    "interpolateLattice_serial", [&]() {
+                                        [encoder setComputePipelineState:pso];
+                                        [encoder
+                                            setBuffer:resource.params_buffer
+                                               offset:0
+                                              atIndex:0];
+                                        [encoder setBuffer:resource.d_tmp2
+                                                    offset:0
+                                                   atIndex:1];
+                                        [encoder setBuffer:resource.d_dst2
+                                                    offset:0
+                                                   atIndex:2];
+                                        [encoder setBuffer:resource.d_tmp2_3
+                                                    offset:0
+                                                   atIndex:3];
+                                        [encoder
+                                            setBuffer:resource.d_scratch_dir
+                                               offset:0
+                                              atIndex:4];
+                                        [encoder
+                                            setBuffer:resource.d_scratch_val
+                                               offset:0
+                                              atIndex:5];
+                                        [encoder dispatchThreadgroups:tgCount
+                                                threadsPerThreadgroup:tgSize];
+                                    });
                             }
                         }
                         if (plane == 0) {

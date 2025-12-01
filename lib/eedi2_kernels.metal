@@ -401,7 +401,7 @@ kernel void KERNEL_NAME(calcDirections)(constant EEDI2Param &d [[buffer(0)]],
             okA ? dirA : INT_MAX, okB ? dirB : INT_MAX, okC ? dirC : INT_MAX,
             okD ? dirD : INT_MAX, okE ? dirE : INT_MAX,
         };
-        boseSortArray(order);
+        SortArray(order);
 
         const int mid = (k & 1) ? order[k / 2]
                                 : (order[(k - 1) / 2] + order[k / 2] + 1) / 2;
@@ -472,7 +472,7 @@ kernel void KERNEL_NAME(filterDirMap)(constant EEDI2Param &d [[buffer(0)]],
         return;
     }
 
-    boseSortArray(order);
+    SortArray(order);
 
     const int mid =
         (u & 1) ? order[u / 2] : (order[(u - 1) / 2] + order[u / 2] + 1) / 2;
@@ -541,7 +541,7 @@ kernel void KERNEL_NAME(expandDirMap)(constant EEDI2Param &d [[buffer(0)]],
     if (u < 5)
         return;
 
-    boseSortArray(order);
+    SortArray(order);
 
     const int mid =
         (u & 1) ? order[u / 2] : (order[(u - 1) / 2] + order[u / 2] + 1) / 2;
@@ -678,7 +678,7 @@ kernel void KERNEL_NAME(markDirections2X)(constant EEDI2Param &d [[buffer(0)]],
     if (v < 3)
         return;
 
-    boseSortArray(order);
+    SortArray(order);
 
     const int mid =
         (v & 1) ? order[v / 2] : (order[(v - 1) / 2] + order[v / 2] + 1) / 2;
@@ -771,7 +771,7 @@ kernel void KERNEL_NAME(filterDirMap2X)(constant EEDI2Param &d [[buffer(0)]],
         return;
     }
 
-    boseSortArray(order);
+    SortArray(order);
 
     const int mid =
         (u & 1) ? order[u / 2] : (order[(u - 1) / 2] + order[u / 2] + 1) / 2;
@@ -852,7 +852,7 @@ kernel void KERNEL_NAME(expandDirMap2X)(constant EEDI2Param &d [[buffer(0)]],
     if (u < 5)
         return;
 
-    boseSortArray(order);
+    SortArray(order);
 
     const int mid =
         (u & 1) ? order[u / 2] : (order[(u - 1) / 2] + order[u / 2] + 1) / 2;
